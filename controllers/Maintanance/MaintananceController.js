@@ -536,7 +536,7 @@ const MaintananceController = {
         line,
         location,
         machine_name,
-        NVL(TO_CHAR(ROUND(total_time_error_machine / 60, 2), 'FM9999990.00'), '0') || ' phút' AS total_time_error_machine,
+        NVL(TO_CHAR(ROUND(total_time_error_machine / 60, 2), 'FM9999990.00'), '0') AS total_time_error_machine,
         CASE
           WHEN COUNT(*) = 0 THEN '(no errors)'
           ELSE
@@ -558,6 +558,102 @@ const MaintananceController = {
         dateTo: date.dateTo || timeR.dateTo,
       });
       return resultOracle.rows;
+    } catch (err) {
+      console.error("Error fetching: ", err);
+      return null;
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+  getMachineAnalysisDailyApi: async (req, res) => {
+    const pool = global.oraclePool;
+    let connection;
+    try {
+      const now = new Date();
+      const timeR = getCurrentShiftTimeRange(now);
+      connection = await req.app.locals.oraclePool.getConnection();
+      const sql = `
+      WITH filtered AS (
+        SELECT *
+        FROM fatp_machine_data
+        WHERE status = 'ERROR'
+          AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+                              AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+      ),
+      machine_agg AS (
+        SELECT
+          line,
+          location,
+          machine_name,
+          SUM(time) AS total_time_error_machine
+        FROM filtered
+        GROUP BY line, location, machine_name
+      ),
+      top3_machines AS (
+        SELECT
+          m.*,
+          DENSE_RANK() OVER (PARTITION BY line ORDER BY total_time_error_machine DESC) AS machine_rank
+        FROM machine_agg m
+      ),
+      error_agg AS (
+        SELECT
+          line,
+          location,
+          machine_name,
+          NVL(error_type, '(UNKNOWN)') AS error_type,
+          SUM(time) AS total_time_error_type
+        FROM filtered
+        GROUP BY line, location, machine_name, NVL(error_type, '(UNKNOWN)')
+      ),
+      ranked_errors AS (
+        SELECT
+          t.line,
+          t.location,
+          t.machine_name,
+          t.total_time_error_machine,
+          t.machine_rank,
+          e.error_type,
+          e.total_time_error_type,
+          DENSE_RANK() OVER (
+            PARTITION BY t.line, t.location, t.machine_name
+            ORDER BY e.total_time_error_type DESC
+          ) AS error_rank
+        FROM top3_machines t
+        JOIN error_agg e
+          ON e.line = t.line
+        AND e.location = t.location
+        AND e.machine_name = t.machine_name
+        WHERE t.machine_rank <= 3
+      )
+      SELECT
+        line,
+        location,
+        machine_name,
+        NVL(TO_CHAR(ROUND(total_time_error_machine / 60, 2), 'FM9999990.00'), '0') AS total_time_error_machine,
+        CASE
+          WHEN COUNT(*) = 0 THEN '(no errors)'
+          ELSE
+            '- ' ||
+            LISTAGG(
+              error_type || ' (' || NVL(TO_CHAR(ROUND(total_time_error_type / 60, 2), 'FM9999990.00'), '0') || ' phút)',
+              CHR(10) || ' - '
+            ) WITHIN GROUP (ORDER BY total_time_error_type DESC)
+        END AS top5_errors
+      FROM ranked_errors
+      WHERE error_rank <= 5
+      GROUP BY
+        line, location, machine_name, machine_rank, total_time_error_machine
+      ORDER BY line, machine_rank, total_time_error_machine DESC
+      `;
+
+      const resultOracle = await connection.execute(sql, {
+        dateFrom: req.body.dateFrom || timeR.dateFrom,
+        dateTo: req.body.dateTo || timeR.dateTo,
+      });
+      buildExcelBuffer(resultOracle.rows);
+      return res.json(resultOracle.rows);
     } catch (err) {
       console.error("Error fetching: ", err);
       return null;

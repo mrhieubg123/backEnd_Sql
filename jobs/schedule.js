@@ -3,7 +3,7 @@ const MaintananceController = require("../controllers/Maintanance/MaintananceCon
 
 // Job chạy lúc 6h30 sáng và 18h30 tối mỗi ngày
 cron.schedule(
-  "30 6,18 * * *",
+  "25 9,18 * * *",
   async () => {
     const now = new Date();
     const timeR = MaintananceController.getCurrentShiftTimeRange(now);
@@ -12,7 +12,7 @@ cron.schedule(
         timeZone: "Asia/Ho_Chi_Minh",
       })}] ✅ Job chạy thành công!`
     );
-    const result = await MaintananceController.getMachineAnalysisDaily({dateFrom:"",dateTo:""});
+    const result = await MaintananceController.getMachineAnalysisDaily({dateFrom:"2025-10-23 00:00:00",dateTo:"2025-10-23 23:00:00"});
     const buffer = await MaintananceController.buildExcelBuffer(result);
     const filename = `ReportAnalysisMachine.xlsx`;
     MaintananceController.sendEmailWithOptionalIcs({

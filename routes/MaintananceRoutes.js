@@ -2,5 +2,6 @@ const MaintananceController = require("../controllers/Maintanance/MaintananceCon
 const router = require("express").Router();
 
 router.post("/sendMail", MaintananceController.registerMaintenanceRoutes);
+router.post("/getMachineAnalysisDailyApi", MaintananceController.getMachineAnalysisDailyApi);
 
 module.exports = router;
