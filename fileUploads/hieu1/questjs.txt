@@ -1,0 +1,87 @@
+Bạn muốn **xuất dữ liệu từ `List<Map>`** có dạng:
+
+```js
+[
+  { Machine: "MC1", cl: "OK", time: "2025-07-30 15:00", name: "Tuan" },
+  { Machine: "MC2", cl: "NG", time: "2025-07-30 15:01", name: "Linh" },
+  ...
+]
+```
+
+Thành **file CSV** có nội dung như sau (đã có `index` và thứ tự cột đúng):
+
+```csv
+index,Machine,time,name,cl
+1,MC1,2025-07-30 15:00,Tuan,OK
+2,MC2,2025-07-30 15:01,Linh,NG
+```
+
+---
+
+## ✅ Cách thực hiện trong ReactJS
+
+### 📄 Hàm `exportToCSV`:
+
+```jsx
+const exportToCSV = (dataList, fileName = "export.csv") => {
+  if (!dataList || dataList.length === 0) return;
+
+  const headers = ["index", "Machine", "time", "name", "cl"];
+
+  const rows = dataList.map((item, index) => {
+    return [
+      index + 1,
+      item.Machine,
+      item.time,
+      item.name,
+      item.cl
+    ].join(",");
+  });
+
+  const csvContent = [headers.join(","), ...rows].join("\n");
+
+  // Tạo blob và tải xuống
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", fileName);
+  link.click();
+};
+```
+
+---
+
+### 📦 Cách dùng trong component:
+
+```jsx
+const ExampleComponent = () => {
+  const dataList = [
+    { Machine: "MC1", cl: "OK", time: "2025-07-30 15:00", name: "Tuan" },
+    { Machine: "MC2", cl: "NG", time: "2025-07-30 15:01", name: "Linh" },
+  ];
+
+  return (
+    <div>
+      <button onClick={() => exportToCSV(dataList)}>Xuất CSV</button>
+    </div>
+  );
+};
+```
+
+---
+
+## ✅ Kết quả:
+
+* Khi bấm nút, file `export.csv` sẽ được tải xuống.
+* Nội dung CSV đúng định dạng yêu cầu: `index,Machine,time,name,cl`
+
+---
+
+Nếu bạn cần:
+
+* ✅ Export UTF-8 có BOM cho Excel đọc đúng dấu tiếng Việt
+* ✅ Xuất file Excel `.xlsx` thay vì `.csv`
+
+Mình có thể giúp mở rộng thêm. Bạn có muốn dùng tiếng Việt không dấu hay giữ nguyên Unicode?
