@@ -14,6 +14,7 @@ const fileRouter = require("./routes/fileRoutes");
 const screwRoutes = require("./routes/ScrewRoutes");
 const vcutRoutes = require("./routes/VcutRoutes");
 const MaintananceRoutes = require("./routes/MaintananceRoutes.js");
+const SparePartRoutes = require("./routes/SparePartRoutes.js");
 
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
@@ -115,6 +116,7 @@ app.use("/api/files", fileRouter);
 app.use("/api/screw", screwRoutes);
 app.use("/api/vcut", vcutRoutes);
 app.use("/api/maintenance", MaintananceRoutes);
+app.use("/api/MPE", SparePartRoutes);
 
 //phuc vu khi build react
 app.use(express.static(path.join(__dirname, "../my-app/build")));

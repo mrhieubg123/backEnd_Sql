@@ -5,25 +5,26 @@ const oracledb = require("oracledb");
 const fs = require("fs");
 const ExcelJS = require("exceljs");
 const { checkServerIdentity } = require("tls");
-
+const XlsxPopulate = require("xlsx-populate");
+const path = require("path");
 const TIMEZONE = process.env.TZ || "Asia/Ho_Chi_Minh";
 const CRON_EXPR = process.env.MAINTENANCE_CRON || "0 8 * * *"; // 08:00 hàng ngày
 const NOTIFY_KIND_D3 = "D-3";
 
 const MAIL_RATE = {
   rateDelta: 60000, // trong 60 giây
-  rateLimit: 25,     // tối đa 25 mail/60s (chỉnh tùy server bạn)
+  rateLimit: 25, // tối đa 25 mail/60s (chỉnh tùy server bạn)
   maxConnections: 1, // 1 kết nối ổn định
-  maxMessages: 100,  // tối đa 100 mail mỗi kết nối trước khi recycle
+  maxMessages: 100, // tối đa 100 mail mỗi kết nối trước khi recycle
 };
 // ---------- Mailer ----------
 function createTransporter() {
-  const tls={
+  const tls = {
     servername: process.env.SMTP_SERVERNAME || process.env.SMTP_HOST,
-    minVersion: 'TLSv1.2',
+    minVersion: "TLSv1.2",
     rejectUnauthorized: false,
     checkServerIdentity: () => undefined,
-  }
+  };
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
@@ -40,7 +41,7 @@ function createTransporter() {
 
     requireTLS: false,
     tls,
-    logger: true
+    logger: true,
   });
 }
 const transporter = createTransporter();
@@ -368,6 +369,59 @@ async function buildExcelBuffer(rows) {
   return wb.xlsx.writeBuffer();
 }
 
+async function buildExcelBuffer2(rows) {
+  const template = path.resolve(
+    "./controllers/Maintanance/templates/top_error_template.xlsx"
+  );
+  const outPath = path.resolve(
+    "./controllers/Maintanance/templates/test1.xlsx"
+  );
+
+  if (fs.existsSync(outPath)) {
+    fs.unlinkSync(outPath);
+  }
+
+  // Mở file mẫu và ghi dữ liệu vào sheet "Data"
+  const wb = await XlsxPopulate.fromFileAsync(template);
+  const ws = wb.sheet("Data");
+  const ws1 = wb.sheet("Availability");
+  const ws2 = wb.sheet("Top5Error");
+
+  // Template đang dùng 3 cột: A=LINE, B=MACHINE_NAME, C=TOTAL_TIME_ERROR_MACHINE
+  // (Chart đọc B2:B1001 và C2:C1001)
+  // → Xóa vùng cũ rồi ghi mới (không xóa/di chuyển hàng 1 vì là header)
+  ws.range("A2:E1001").clear();
+  ws1.range("B2:B1001").clear();
+  ws2.range("A2:B1001").clear();
+
+  rows[0].forEach((r, idx) => {
+    const row = 2 + idx;
+    ws.cell(`A${row}`).value(r.LINE ?? "");
+    ws.cell(`B${row}`).value(r.LOCATION ?? "");
+    ws.cell(`C${row}`).value(r.MACHINE_NAME ?? "");
+    ws.cell(`D${row}`).value(Number(r.TOTAL_TIME_ERROR_MACHINE) || 0);
+    ws.cell(`E${row}`).value(r.TOP5_ERRORS ?? "");
+  });
+
+  rows[1].forEach((r, idx) => {
+    ws1.cell(`B${2}`).value(Number(r.AVAILABILITY) || 0);
+    ws1.cell(`B${3}`).value(Number(r.DOWNTIME) || 0);
+  });
+
+  rows[2].forEach((r, idx) => {
+    const row = 2 + idx;
+    ws2.cell(`A${row}`).value(r.ERROR_TYPE ?? "");
+    ws2.cell(`B${row}`).value(Number(r.TOTAL_ERROR_HOURS) || 0);
+  });
+
+  // Lưu file: chart vẫn còn nguyên
+  await wb.toFileAsync(outPath);
+
+  // Nếu bạn vẫn muốn lấy buffer trả về:
+  const buffer = await wb.outputAsync(); // Buffer
+  return buffer;
+}
+
 const convertDate = (date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -413,6 +467,7 @@ function getCurrentShiftTimeRange(date) {
 const MaintananceController = {
   sendEmailWithOptionalIcs,
   buildExcelBuffer,
+  buildExcelBuffer2,
   getCurrentShiftTimeRange,
   registerMaintenanceRoutes: async (req, res) => {
     let connection;
@@ -482,10 +537,18 @@ const MaintananceController = {
       const sql = `
       WITH filtered AS (
         SELECT *
-        FROM fatp_machine_data
+        FROM fatp_machine_data f
         WHERE status = 'ERROR'
           AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
                               AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+          AND NOT EXISTS (
+                  SELECT 1
+                  FROM   over_time_data m
+                  WHERE  m.line = f.line
+                    AND  m.type = 'Maintenance'
+                    AND  f.start_time < m.end_time
+                    AND  f.start_time  > m.start_time
+                )
       ),
       machine_agg AS (
         SELECT
@@ -557,7 +620,48 @@ const MaintananceController = {
         dateFrom: date.dateFrom || timeR.dateFrom,
         dateTo: date.dateTo || timeR.dateTo,
       });
-      return resultOracle.rows;
+      const sql1 = `
+        SELECT
+          ROUND(SUM(CASE WHEN STATUS = 'RUN'
+                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+                        ELSE 0 END), 2) AS Availability,
+          ROUND(SUM(CASE WHEN STATUS = 'ERROR'
+                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+                        ELSE 0 END), 2) AS DownTime
+        FROM FATP_MACHINE_DATA f
+        WHERE START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+          AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+          AND NOT EXISTS (
+                  SELECT 1
+                  FROM   over_time_data m
+                  WHERE  m.line = f.line
+                    AND  m.type = 'Maintenance'
+                    AND  f.start_time < m.end_time
+                    AND  f.start_time  > m.start_time
+                )
+      `;
+      const resultOracle1 = await connection.execute(sql1, {
+        dateFrom: date.dateFrom || timeR.dateFrom,
+        dateTo: date.dateTo || timeR.dateTo,
+      });
+      const sql2 = `
+        SELECT
+          ERROR_TYPE,
+          ROUND(SUM( (NVL(END_TIME, SYSDATE) - START_TIME) * 24 ), 2) AS TOTAL_ERROR_HOURS
+        FROM FATP_MACHINE_DATA
+        WHERE STATUS = 'ERROR'
+          AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+          AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+        GROUP BY ERROR_TYPE
+        ORDER BY TOTAL_ERROR_HOURS DESC
+        FETCH FIRST 5 ROWS ONLY
+      `;
+      const resultOracle2 = await connection.execute(sql2, {
+        dateFrom: date.dateFrom || timeR.dateFrom,
+        dateTo: date.dateTo || timeR.dateTo,
+      });
+      // buildExcelBuffer2([resultOracle.rows,resultOracle1.rows]);
+      return [resultOracle.rows, resultOracle1.rows, resultOracle2.rows];
     } catch (err) {
       console.error("Error fetching: ", err);
       return null;
@@ -577,10 +681,18 @@ const MaintananceController = {
       const sql = `
       WITH filtered AS (
         SELECT *
-        FROM fatp_machine_data
+        FROM fatp_machine_data f
         WHERE status = 'ERROR'
           AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
                               AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+          AND NOT EXISTS (
+                  SELECT 1
+                  FROM   over_time_data m
+                  WHERE  m.line = f.line
+                    AND  m.type = 'Maintenance'
+                    AND  f.start_time < m.end_time
+                    AND  f.start_time  > m.start_time
+                )
       ),
       machine_agg AS (
         SELECT
@@ -652,8 +764,52 @@ const MaintananceController = {
         dateFrom: req.body.dateFrom || timeR.dateFrom,
         dateTo: req.body.dateTo || timeR.dateTo,
       });
-      buildExcelBuffer(resultOracle.rows);
-      return res.json(resultOracle.rows);
+      const sql1 = `
+        SELECT
+          ROUND(SUM(CASE WHEN STATUS = 'RUN'
+                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+                        ELSE 0 END), 2) AS Availability,
+          ROUND(SUM(CASE WHEN STATUS = 'ERROR'
+                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+                        ELSE 0 END), 2) AS DownTime
+        FROM FATP_MACHINE_DATA f
+        WHERE START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+          AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+          AND NOT EXISTS (
+                  SELECT 1
+                  FROM   over_time_data m
+                  WHERE  m.line = f.line
+                    AND  m.type = 'Maintenance'
+                    AND  f.start_time < m.end_time
+                    AND  f.start_time  > m.start_time
+                )
+      `;
+      const resultOracle1 = await connection.execute(sql1, {
+        dateFrom: req.body.dateFrom || timeR.dateFrom,
+        dateTo: req.body.dateTo || timeR.dateTo,
+      });
+      const sql2 = `
+        SELECT
+          ERROR_TYPE,
+          ROUND(SUM( (NVL(END_TIME, SYSDATE) - START_TIME) * 24 ), 2) AS TOTAL_ERROR_HOURS
+        FROM FATP_MACHINE_DATA
+        WHERE STATUS = 'ERROR'
+          AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+          AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+        GROUP BY ERROR_TYPE
+        ORDER BY TOTAL_ERROR_HOURS DESC
+        FETCH FIRST 5 ROWS ONLY
+      `;
+      const resultOracle2 = await connection.execute(sql2, {
+        dateFrom: req.body.dateFrom || timeR.dateFrom,
+        dateTo: req.body.dateTo || timeR.dateTo,
+      });
+      buildExcelBuffer2([
+        resultOracle.rows,
+        resultOracle1.rows,
+        resultOracle2.rows,
+      ]);
+      return res.json({ data1: resultOracle.rows, data2: resultOracle1.rows, data3: resultOracle2.rows });
     } catch (err) {
       console.error("Error fetching: ", err);
       return null;

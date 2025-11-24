@@ -218,7 +218,7 @@ const FATPController = {
       const now = new Date();
       const sevenDayAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       connection = await req.app.locals.oraclePool.getConnection();
-      console.log("getFATPMachineTotalTrend request", res);
+      console.log("getFATPMachineTotalTrend request", req.body);
       const resultOracle =
         await connection.execute(`
           WITH ot AS (
