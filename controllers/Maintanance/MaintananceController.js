@@ -142,7 +142,7 @@ async function sendEmailWithOptionalIcs({
     from: process.env.MAIL_FROM || process.env.SMTP_USER,
     to: toList.join(", "),
     subject,
-    finalHtml,
+    html: finalHtml,
     attachments: attachments || [],
   };
   const info = await transporter.sendMail(mail);
@@ -167,23 +167,19 @@ function buildEmailHtml(row, whenLocalStr) {
 }
 
 // ---------- DB ops ----------
-async function fetchMaintenancesD3(pool) {
+async function fetchMaintenancesD3() {
   const sql = `
-    SELECT m.ID, m.FACTORY, m.LINE, m.MACHINE_NAME, m.MAINTENANCE_DATE,
-           m.MANAGER_EMAILS, m.NOTE
-      FROM MAINTENANCE m
-     WHERE m.MAINTENANCE_DATE >= TRUNC(CAST(SYSTIMESTAMP AT TIME ZONE :tz AS DATE)) + 3
-       AND m.MAINTENANCE_DATE <  TRUNC(CAST(SYSTIMESTAMP AT TIME ZONE :tz AS DATE)) + 4
-       AND NOT EXISTS (
-             SELECT 1 FROM MAINTENANCE_NOTIFICATIONS n
-              WHERE n.MAINTENANCE_ID = m.ID AND n.KIND = :kind
-           )
-  ORDER BY m.MAINTENANCE_DATE ASC`;
-  const binds = { tz: TIMEZONE, kind: NOTIFY_KIND_D3 };
+    SELECT line, date_check
+      FROM checklist_result_detail 
+     WHERE to_date(date_check,'YYYY-MM-DD') >= TRUNC(CAST(SYSTIMESTAMP AS DATE)) + 2
+       AND to_date(date_check,'YYYY-MM-DD') <  TRUNC(CAST(SYSTIMESTAMP AS DATE)) + 3
+       group by line, date_check
+  ORDER BY line`;
 
+  const pool = global.oraclePool;
   const conn = await pool.getConnection();
   try {
-    const rs = await conn.execute(sql, binds);
+    const rs = await conn.execute(sql);
     return rs.rows || [];
   } finally {
     await conn.close();
@@ -464,11 +460,22 @@ function getCurrentShiftTimeRange(date) {
   };
 }
 
+function getAllDayOfYear(date) {
+  const year = date.getFullYear();
+  return {
+    dateFrom: `${year}-01-01`,
+    dateTo: `${year}-12-31`,
+  };
+}
+
+function getMaintenancePlanOngoing() {}
+
 const MaintananceController = {
   sendEmailWithOptionalIcs,
   buildExcelBuffer,
   buildExcelBuffer2,
   getCurrentShiftTimeRange,
+  fetchMaintenancesD3,
   registerMaintenanceRoutes: async (req, res) => {
     let connection;
     try {
@@ -539,6 +546,7 @@ const MaintananceController = {
         SELECT *
         FROM fatp_machine_data f
         WHERE status = 'ERROR'
+          AND ( :line IS NULL OR f.line = :line )
           AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
                               AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
           AND NOT EXISTS (
@@ -619,6 +627,7 @@ const MaintananceController = {
       const resultOracle = await connection.execute(sql, {
         dateFrom: date.dateFrom || timeR.dateFrom,
         dateTo: date.dateTo || timeR.dateTo,
+        line: date.line[0].LINE,
       });
       const sql1 = `
         SELECT
@@ -631,6 +640,7 @@ const MaintananceController = {
         FROM FATP_MACHINE_DATA f
         WHERE START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
           AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+          AND ( :line IS NULL OR f.line = :line )
           AND NOT EXISTS (
                   SELECT 1
                   FROM   over_time_data m
@@ -642,6 +652,7 @@ const MaintananceController = {
       `;
       const resultOracle1 = await connection.execute(sql1, {
         dateFrom: date.dateFrom || timeR.dateFrom,
+        line: date.line[0].LINE,
         dateTo: date.dateTo || timeR.dateTo,
       });
       const sql2 = `
@@ -650,14 +661,17 @@ const MaintananceController = {
           ROUND(SUM( (NVL(END_TIME, SYSDATE) - START_TIME) * 24 ), 2) AS TOTAL_ERROR_HOURS
         FROM FATP_MACHINE_DATA
         WHERE STATUS = 'ERROR'
+          AND ( :line IS NULL OR line = :line )
           AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
           AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
         GROUP BY ERROR_TYPE
         ORDER BY TOTAL_ERROR_HOURS DESC
         FETCH FIRST 5 ROWS ONLY
       `;
+      console.log(date)
       const resultOracle2 = await connection.execute(sql2, {
         dateFrom: date.dateFrom || timeR.dateFrom,
+        line: date.line[0].LINE,
         dateTo: date.dateTo || timeR.dateTo,
       });
       // buildExcelBuffer2([resultOracle.rows,resultOracle1.rows]);
@@ -809,9 +823,37 @@ const MaintananceController = {
         resultOracle1.rows,
         resultOracle2.rows,
       ]);
-      return res.json({ data1: resultOracle.rows, data2: resultOracle1.rows, data3: resultOracle2.rows });
+      return res.json({
+        data1: resultOracle.rows,
+        data2: resultOracle1.rows,
+        data3: resultOracle2.rows,
+      });
     } catch (err) {
       console.error("Error fetching: ", err);
+      return null;
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+  getMaintenancePlanApi: async (req, res) => {
+    const pool = global.oraclePool;
+    let connection;
+    try {
+      const now = new Date();
+      const timeR = getAllDayOfYear(now);
+      connection = await req.app.locals.oraclePool.getConnection();
+      const sql = `SELECT * FROM checklist_result_detail 
+      where TO_DATE(date_check,'YYYY-MM-DD') 
+        BETWEEN TO_DATE(:dateFrom,'YYYY-MM-DD') and TO_DATE(:dateTo,'YYYY-MM-DD')`;
+      const resultOracle = await connection.execute(sql, {
+        dateFrom: req.body.dateFrom || timeR.dateFrom,
+        dateTo: req.body.dateTo || timeR.dateTo,
+      });
+      return res.json(resultOracle.rows);
+    } catch (err) {
+      console.error("Error fetching getMaintenancePlanApi: ", err);
       return null;
     } finally {
       if (connection) {
