@@ -15,6 +15,8 @@ const screwRoutes = require("./routes/ScrewRoutes");
 const vcutRoutes = require("./routes/VcutRoutes");
 const MaintananceRoutes = require("./routes/MaintananceRoutes.js");
 const SparePartRoutes = require("./routes/SparePartRoutes.js");
+const VoltageRoutes = require("./routes/VoltageRoutes.js");
+const ProVersionRoutes = require("./routes/ProVersionRoutes.js");
 
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
@@ -117,6 +119,8 @@ app.use("/api/screw", screwRoutes);
 app.use("/api/vcut", vcutRoutes);
 app.use("/api/maintenance", MaintananceRoutes);
 app.use("/api/MPE", SparePartRoutes);
+app.use("/api/Voltage", VoltageRoutes);
+app.use("/api/version", ProVersionRoutes);
 
 //phuc vu khi build react
 app.use(express.static(path.join(__dirname, "../my-app/build")));

@@ -57,52 +57,18 @@ function getCurrentShiftTimeRange(date) {
 }
 
 const VoltageMonitorController = {
-  getVcutMachineStatus: async (req, res) => {
+  getVoltageMonitorMachineStatus: async (req, res) => {
     let connection;
     try {
       connection = await req.app.locals.oraclePool.getConnection();
-      // const resultOracle = await connection.execute(`
-      //   WITH base_keys AS (
-      //     SELECT DISTINCT factory, line, location, name_machine FROM KNIFE_VCUT_MACHINE_HISTORY
-      //     UNION
-      //     SELECT DISTINCT factory, line, location, name_machine FROM VCUT_MACHINE_DATA
-      //   ),
-      //   last_hist AS (
-      //     SELECT factory, line, location, name_machine,
-      //           MAX(start_time) AS max_start_time
-      //     FROM KNIFE_VCUT_MACHINE_HISTORY
-      //     GROUP BY factory, line, location, name_machine
-      //   ),
-      //   agg AS (
-      //     SELECT
-      //       bk.factory, bk.line, bk.location, bk.name_machine,
-      //       MAX(v.total) KEEP (DENSE_RANK FIRST ORDER BY v.id) AS min_total,
-      //       MAX(v.total) KEEP (DENSE_RANK LAST  ORDER BY v.id) AS max_total
-      //     FROM base_keys bk
-      //     LEFT JOIN last_hist h
-      //       ON  h.factory      = bk.factory
-      //       AND h.line         = bk.line
-      //       AND h.location     = bk.location
-      //       AND h.name_machine = bk.name_machine
-      //     LEFT JOIN VCUT_MACHINE_DATA v
-      //       ON  v.factory      = bk.factory
-      //       AND v.line         = bk.line
-      //       AND v.location     = bk.location
-      //       AND v.name_machine = bk.name_machine
-      //       AND v.time > COALESCE(h.max_start_time, DATE '1970-01-01')
-      //     GROUP BY bk.factory, bk.line, bk.location, bk.name_machine
-      //   )
-      //   SELECT
-      //     factory, line, location, name_machine,
-      //     NVL(max_total - min_total, 0) AS diff
-      //   FROM agg
-      //   `);
       const resultOracle =
-        await connection.execute(`SELECT * from vcut_machine_data 
-          where id in (SELECT max(id) from vcut_machine_data group by factory, line,location)`);
+        await connection.execute(`select machine_name,location,line, 
+          ct_robot|| '-' ||KCN1|| '-' ||KCN2|| '-' ||KCN3|| '-' ||KCN4|| '-' ||KCN5|| '-' ||KCN6 as KCN 
+          from test_mold_machine_data where id in (SELECT max(id)from test_mold_machine_data 
+          group by machine_name,location,line)`);
       return res.json(resultOracle.rows);
     } catch (err) {
-      console.error("Error getVcutMachineStatus: ", err);
+      console.error("Error getVoltageMonitorMachineStatus: ", err);
       return res.status(500).json({ msg: err.message });
     } finally {
       if (connection) {
@@ -111,141 +77,37 @@ const VoltageMonitorController = {
     }
   },
 
-  getDataVcutMachineTotalTrend: async (req, res) => {
+  getVoltageMonitorDetail: async (req, res) => {
     let connection;
+    // Hàm format yyyy-MM-dd theo giờ local
+    const formatDate = (d) => {
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    };
+
+    const today = new Date(); // ngày hiện tại
+    const dateTo = formatDate(today); // yyyy-MM-dd
+
+    const dateFromDate = new Date();
+    dateFromDate.setDate(dateFromDate.getDate() - 3); // 3 ngày trước
+    const dateFrom = formatDate(dateFromDate);
     try {
       const now = new Date();
-      const sevenDayAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       connection = await req.app.locals.oraclePool.getConnection();
-      const resultOracle = await connection.execute(`
-        SELECT ID ,FACTORY ,LINE ,LOCATION ,NAME_MACHINE ,TOTAL ,
-          TO_CHAR(time, 'YYYY-MM-DD HH24:MI:SS') AS time
-        FROM VCUT_MACHINE_DATA where time BETWEEN 
-        TO_DATE('${
-          req.body.dateFrom || convertDate2(sevenDayAgo) + " 00:00:00"
-        }','YYYY-MM-DD HH24:MI:SS')
-          AND TO_DATE('${
-            req.body.dateTo || convertDate2(now) + " 23:59:59"
-          }','YYYY-MM-DD HH24:MI:SS')
-        `);
-      return res.json(resultOracle.rows);
-    } catch (err) {
-      console.error("Error getDataVcutMachineTotalTrend: ", err);
-      return res.status(500).json({ msg: err.message });
-    } finally {
-      if (connection) {
-        await connection.close();
-      }
-    }
-  },
-
-  getKnifeVcutMachineHistory: async (req, res) => {
-    let connection;
-    try {
-      connection = await req.app.locals.oraclePool.getConnection();
-      const resultOracle = await connection.execute(`
-        SELECT
-          k.LINE,
-          k.LOCATION,
-          k.NAME_MACHINE,
-          k.START_TIME,
-          k.FACTORY,
-          vc.TOTAL AS TOTAL_AT_CHANGE
-        FROM knife_vcut_machine_history k
-        OUTER APPLY (
-          SELECT v.TOTAL
-          FROM VCUT_MACHINE_DATA v
-          WHERE v.LINE = k.LINE
-            AND v.LOCATION = k.LOCATION
-            AND v.NAME_MACHINE = k.NAME_MACHINE
-            AND v.factory = k.factory
-            AND v.TIME <= k.START_TIME
-          ORDER BY v.TIME DESC
-          FETCH FIRST 1 ROWS ONLY
-        ) vc
-        where factory='${req.body.factory}'
-          and line='${req.body.line}'
-          and location='${req.body.location}'
-        order by k.start_time desc
-      `);
-      return res.json(resultOracle.rows);
-    } catch (err) {
-      console.error("Error fetching getDataForceDefault: ", err);
-      return res.status(500).json({ msg: err.message });
-    } finally {
-      if (connection) {
-        await connection.close();
-      }
-    }
-  },
-
-  changeKnifeVcutmachine: async (req, res) => {
-    let connection;
-    try {
-      connection = await req.app.locals.oraclePool.getConnection();
-      const sql = `
-      INSERT INTO KNIFE_VCUT_MACHINE_HISTORY
-        (LINE, LOCATION, NAME_MACHINE, START_TIME, "COMMENT", FACTORY)
-      VALUES
-        (:p_line, :p_location, :p_name, :p_start_time, :p_comment, :p_factory)
-    `;
-
-      const binds = {
-        p_line: req.body.line ?? null,
-        p_location: req.body.location ?? null,
-        p_name: req.body.name ?? null,
-        p_comment: req.body.comment ?? null,
-        p_factory: req.body.factory ?? null,
-        p_start_time: new Date(req.body.startTime), // JS Date là OK
+      const sql = `select *
+          from test_mold_machine_data where location = :location and line = :line 
+            and CREATED_AT BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+                              AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')`;
+      const blind = {
+        location: req.body.location,
+        line: req.body.line,
+        dateFrom: req.body.dateFrom || dateFrom,
+        dateTo: req.body.dateTo || dateTo,
       };
-      const resultOracle = await connection.execute(sql, binds, {
-        autoCommit: true,
-      });
-      return res.json({
-        success: true,
-        message: `change Knife Vcut machine success`,
-      });
+      const resultOracle = await connection.execute(sql, blind);
+      return res.json(resultOracle.rows);
     } catch (err) {
-      console.error("Error changeKinifeVcutmachine: ", err);
-      return res.status(500).json({ msg: err.message });
-    } finally {
-      if (connection) {
-        await connection.close();
-      }
-    }
-  },
-  editChangeKnifeVcutmachine: async (req, res) => {
-    let connection;
-    try {
-      connection = await req.app.locals.oraclePool.getConnection();
-      const resultOracle = await connection.execute(`
-        UPDATE KNIFE_VCUT_MACHINE_HISTORY 
-        SET 
-        START_TIME = ${new Date(req.body.startTime)},
-        WHERE ID = '${req.body.id}'
-      `);
-      await connection.commit();
-      return res.json({ success: true, message: `Edit success` });
-    } catch (err) {
-      console.error("Error editChangeKnifeVcutmachine: ", err);
-      return res.status(500).json({ msg: err.message });
-    } finally {
-      if (connection) {
-        await connection.close();
-      }
-    }
-  },
-  deleteChangeKnifeVcutmachine: async (req, res) => {
-    let connection;
-    try {
-      connection = await req.app.locals.oraclePool.getConnection();
-      const resultOracle = await connection.execute(`
-        DELETE FROM KNIFE_VCUT_MACHINE_HISTORY WHERE ID = '${req.body.id}'
-      `);
-      await connection.commit();
-      return res.json({ success: true, message: `Delete success` });
-    } catch (err) {
-      console.error("Error deleteChangeKnifeVcutmachine: ", err);
+      console.error("Error getVoltageMonitorDetail: ", err);
       return res.status(500).json({ msg: err.message });
     } finally {
       if (connection) {

@@ -627,7 +627,7 @@ const MaintananceController = {
       const resultOracle = await connection.execute(sql, {
         dateFrom: date.dateFrom || timeR.dateFrom,
         dateTo: date.dateTo || timeR.dateTo,
-        line: date.line[0].LINE,
+        line: date.line?.[0]?.LINE || null,
       });
       const sql1 = `
         SELECT
@@ -652,7 +652,7 @@ const MaintananceController = {
       `;
       const resultOracle1 = await connection.execute(sql1, {
         dateFrom: date.dateFrom || timeR.dateFrom,
-        line: date.line[0].LINE,
+        line: date.line?.[0]?.LINE || null,
         dateTo: date.dateTo || timeR.dateTo,
       });
       const sql2 = `
@@ -668,10 +668,10 @@ const MaintananceController = {
         ORDER BY TOTAL_ERROR_HOURS DESC
         FETCH FIRST 5 ROWS ONLY
       `;
-      console.log(date)
+      console.log(date);
       const resultOracle2 = await connection.execute(sql2, {
         dateFrom: date.dateFrom || timeR.dateFrom,
-        line: date.line[0].LINE,
+        line: date.line?.[0]?.LINE || null,
         dateTo: date.dateTo || timeR.dateTo,
       });
       // buildExcelBuffer2([resultOracle.rows,resultOracle1.rows]);
@@ -846,7 +846,8 @@ const MaintananceController = {
       connection = await req.app.locals.oraclePool.getConnection();
       const sql = `SELECT * FROM checklist_result_detail 
       where TO_DATE(date_check,'YYYY-MM-DD') 
-        BETWEEN TO_DATE(:dateFrom,'YYYY-MM-DD') and TO_DATE(:dateTo,'YYYY-MM-DD')`;
+        BETWEEN TO_DATE(:dateFrom,'YYYY-MM-DD') and TO_DATE(:dateTo,'YYYY-MM-DD')
+        and id in (SELECT max(id) FROM checklist_result_detail group by name_machine, line, code_machine, qr_code, date_check)`;
       const resultOracle = await connection.execute(sql, {
         dateFrom: req.body.dateFrom || timeR.dateFrom,
         dateTo: req.body.dateTo || timeR.dateTo,
