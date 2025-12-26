@@ -170,37 +170,67 @@ const FATPController = {
       const locations = locResult.rows.map((row) => row.LOCATION);
       const pivotCols = locations.map((l) => `'M${l}' AS "M${l}"`).join(",");
       const resultOracle = await connection.execute(`
-        SELECT * FROM (
-            SELECT LINE,
-                  'M' || location AS loc,
-                  (
-                    CASE
-                      WHEN EXISTS (
-                        SELECT 1
-                        FROM OVER_TIME_DATA o
-                        WHERE o.LINE = f.LINE
-                          AND o.TYPE = 'Maintenance'
-                          AND SYSTIMESTAMP BETWEEN o.START_TIME
-                              AND NVL(o.END_TIME, TIMESTAMP '9999-12-31 23:59:59')
-                      )
-                      THEN 'OFF'
-                      ELSE f.status
-                    END
-                  ) || '-/-' || machine_type || '-/-' ||
-                  machine_name || '-/-' || error_type || '-/-' || error_code || '-/-' || 
-                  TO_CHAR(start_time, 'YYYY-MM-DD HH24:MI:SS') AS val
-            FROM FATP_MACHINE_DATA f
-            WHERE start_time = (
-                SELECT MAX(start_time)
-                FROM FATP_MACHINE_DATA
-                WHERE LINE = f.LINE
-                  AND location = f.location
-            )
+       WITH conn AS (
+          SELECT line,
+                MAX(datetime) AS last_dt
+          FROM FATP_MACHINE_DATA_CONNECT
+          GROUP BY line
+        )
+        SELECT *
+        FROM (
+          SELECT
+              f.line,
+              'M' || f.location AS loc,
+              (
+                CASE
+                  -- Line mất heartbeat > 15 phút => OFF toàn line
+                  ---WHEN c.last_dt IS NULL
+                  ---    OR c.last_dt < (SYSTIMESTAMP - INTERVAL '22' MINUTE)
+                  ---THEN 'OFF'
+
+                  -- Line đang Maintenance => OFF
+                  WHEN EXISTS (
+                    SELECT 1
+                    FROM OVER_TIME_DATA o
+                    WHERE o.line = f.line
+                      AND o.type = 'Maintenance'
+                      AND SYSTIMESTAMP BETWEEN o.start_time
+                                          AND NVL(o.end_time, TIMESTAMP '9999-12-31 23:59:59')
+                  )
+                  THEN 'OFF'
+
+                  ELSE f.status
+                END
+              )
+              || '-/-' || f.machine_type
+              || '-/-' || f.machine_name
+              || '-/-' || 
+              ( 
+                case 
+                  -- Line mất heartbeat > 15 phút => OFF toàn line
+                  WHEN c.last_dt IS NULL
+                      OR c.last_dt < (SYSTIMESTAMP - INTERVAL '22' MINUTE)
+                  THEN 'Program turn off'
+                  else f.error_type
+                end
+              )
+              || '-/-' || f.error_code
+              || '-/-' || TO_CHAR(f.start_time, 'YYYY-MM-DD HH24:MI:SS') AS val
+          FROM FATP_MACHINE_DATA f
+          LEFT JOIN conn c
+            ON c.line = f.line
+          WHERE f.start_time = (
+            SELECT MAX(f2.start_time)
+            FROM FATP_MACHINE_DATA f2
+            WHERE f2.line = f.line
+              AND f2.location = f.location
+          )
         ) src
         PIVOT (
-            MAX(val) FOR loc IN (${pivotCols})
+          MAX(val) FOR loc IN (${pivotCols})
         )
-        ORDER BY LINE`);
+        ORDER BY line
+        `);
       return res.json(resultOracle.rows);
     } catch (err) {
       console.error("Error fetching users: ", err);

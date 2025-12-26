@@ -122,6 +122,9 @@ app.use("/api/MPE", SparePartRoutes);
 app.use("/api/Voltage", VoltageRoutes);
 app.use("/api/version", ProVersionRoutes);
 
+// Serve static
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 //phuc vu khi build react
 app.use(express.static(path.join(__dirname, "../my-app/build")));
 app.get("*", (req, res) => {

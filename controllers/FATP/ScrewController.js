@@ -72,8 +72,8 @@ const ScrewController = {
           : "shielding_cover_force_info";
       const resultOracle = await connection.execute(`
         SELECT line,location,name_machine,
-          SUM(CASE WHEN state = 'PASS' THEN 1 ELSE 0 END) AS pass_count,
-          SUM(CASE WHEN state = 'FAIL' THEN 1 ELSE 0 END) AS fail_count
+          SUM(CASE WHEN lower(state) = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+          SUM(CASE WHEN lower(state) = 'fail' THEN 1 ELSE 0 END) AS fail_count
         FROM ${tableName}
         ---WHERE TIME_UPDATE BETWEEN TO_DATE('${
           req.body.dateFrom || timeR.dateFrom
@@ -142,11 +142,15 @@ const ScrewController = {
           : req.body.type === "Glue"
           ? "glue_force_info"
           : "shielding_cover_force_info";
+      const forceSelect =
+        req.body.type === "Glue"
+          ? `FORCE_1 ,FORCE_2 ,FORCE_3 ,FORCE_4,FORCE_5 ,FORCE_6 ,FORCE_7 ,FORCE_8,FORCE_9 ,FORCE_10 ,FORCE_11 ,FORCE_12`
+          : `FORCE_1 ,FORCE_2 ,FORCE_3 ,FORCE_4`;
       const resultOracle = await connection.execute(`
-        SELECT ID ,FACTORY ,LINE ,LOCATION ,NAME_MACHINE ,MODEL_NAME ,SERIAL_NUMBER ,FORCE_1 ,FORCE_2 ,FORCE_3 ,FORCE_4 ,STATE ,
+        SELECT ID ,FACTORY ,LINE ,LOCATION ,NAME_MACHINE ,MODEL_NAME ,SERIAL_NUMBER ,${forceSelect} ,STATE ,
           TO_CHAR(time_update, 'YYYY-MM-DD HH24:MI:SS') AS time_update
-        FROM ${tableName} where line = '${req.body.line}' and NAME_MACHINE = '${
-        req.body.name
+        FROM ${tableName} where line = '${req.body.line}' and LOCATION = '${
+        req.body.location
       }'
         ---AND TIME_UPDATE BETWEEN TO_DATE('${
           req.body.dateFrom || timeR.dateFrom
@@ -346,7 +350,7 @@ const ScrewController = {
           line,
           type,
           path: savedPath, // đường dẫn nội bộ
-          publicUrl: `/uploads/${req.file.filename}`, // URL tĩnh nếu bật static
+          publicUrl: savedPath, // URL tĩnh nếu bật static
           originalName: req.file.originalname,
           size: req.file.size,
           mimetype: req.file.mimetype,

@@ -10,7 +10,7 @@ router.get('/folders', controller.listFolders);
 router.get('/files', controller.listFiles);
 router.post('/upload', upload.single('file'), controller.uploadFile);
 router.get('/download/:folder/:filename', controller.downloadFile);
-router.delete('/file/:folder/:filename', controller.deleteFile);
+router.delete('/file/delete', controller.deleteFile);
 router.delete('/folder/:folder', controller.deleteFolder);
 router.post('/folder/password', controller.setFolderPassword);
 router.put('/folder/password', controller.updateFolderPassword);
