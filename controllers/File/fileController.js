@@ -18,6 +18,8 @@ const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
 });
 
+const listFolderDocumentPrivate = ["ProjectManagement", "MetDocument"];
+
 const loadPasswords = () => {
   if (!fs.existsSync(passwordFile)) {
     fs.writeFileSync(passwordFile, JSON.stringify({}));
@@ -62,7 +64,11 @@ exports.uploadFile = (req, res) => {
   const targetDir = path.join(basePath, folder);
   if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
-  const destPath = path.join(targetDir, file.originalname);
+  const originalName = Buffer.from(file.originalname, "latin1")
+    .toString("utf8")
+    .normalize("NFC");
+
+  const destPath = path.join(targetDir, originalName);
   fs.renameSync(file.path, destPath);
 
   res.send({ message: "File uploaded", path: destPath });
@@ -72,7 +78,9 @@ exports.listFolders = (req, res) => {
   const items = fs.readdirSync(basePath, { withFileTypes: true });
   const passwords = loadPasswords();
   const folders = items
-    .filter((i) => i.isDirectory() && i.name !== "ProjectManagement")
+    .filter(
+      (i) => i.isDirectory() && !listFolderDocumentPrivate.includes(i.name)
+    )
     .map((i) => ({
       name: i.name,
       hasPassword: !!passwords[i.name],

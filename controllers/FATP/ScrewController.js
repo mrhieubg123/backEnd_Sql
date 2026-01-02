@@ -149,9 +149,9 @@ const ScrewController = {
       const resultOracle = await connection.execute(`
         SELECT ID ,FACTORY ,LINE ,LOCATION ,NAME_MACHINE ,MODEL_NAME ,SERIAL_NUMBER ,${forceSelect} ,STATE ,
           TO_CHAR(time_update, 'YYYY-MM-DD HH24:MI:SS') AS time_update
-        FROM ${tableName} where line = '${req.body.line}' and LOCATION = '${
-        req.body.location
-      }'
+        FROM ${tableName} where line = '${req.body.line}' 
+        and name_machine = '${req.body.name}'
+        ---and LOCATION = '${req.body.location}'
         ---AND TIME_UPDATE BETWEEN TO_DATE('${
           req.body.dateFrom || timeR.dateFrom
         }', 'YYYY-MM-DD HH24:MI:SS')
