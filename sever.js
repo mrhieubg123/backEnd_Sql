@@ -17,6 +17,8 @@ const MaintananceRoutes = require("./routes/MaintananceRoutes.js");
 const SparePartRoutes = require("./routes/SparePartRoutes.js");
 const VoltageRoutes = require("./routes/VoltageRoutes.js");
 const ProVersionRoutes = require("./routes/ProVersionRoutes.js");
+const ProjectManagementRoutes = require("./routes/ProjectManagementRoutes.js");
+const YeildRateRoutes = require("./routes/YeildRateRoutes.js");
 
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
@@ -121,6 +123,8 @@ app.use("/api/maintenance", MaintananceRoutes);
 app.use("/api/MPE", SparePartRoutes);
 app.use("/api/Voltage", VoltageRoutes);
 app.use("/api/version", ProVersionRoutes);
+app.use("/api/projectManagement", ProjectManagementRoutes);
+app.use("/api/YeildRate", YeildRateRoutes);
 
 // Serve static
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -154,7 +158,7 @@ async function init() {
     });
     app.locals.oraclePool = pool;
     global.oraclePool = pool;
-    require('./jobs/schedule.js');
+    require("./jobs/schedule.js");
     http.createServer(app).listen(PORT, () => {
       console.log(`Server HTTP chạy trên cổng ${PORT}`);
     });
