@@ -68,8 +68,8 @@ const ScrewController = {
         req.body.type === "Screw"
           ? "screw_force_info"
           : req.body.type === "Glue"
-          ? "glue_force_info"
-          : "shielding_cover_force_info";
+            ? "glue_force_info"
+            : "shielding_cover_force_info";
       const resultOracle = await connection.execute(`
         SELECT line,location,name_machine,
           SUM(CASE WHEN lower(state) = 'pass' THEN 1 ELSE 0 END) AS pass_count,
@@ -105,8 +105,8 @@ const ScrewController = {
         req.body.type === "Screw"
           ? "screw_force_info"
           : req.body.type === "Glue"
-          ? "glue_force_info"
-          : "shielding_cover_force_info";
+            ? "glue_force_info"
+            : "shielding_cover_force_info";
       const resultOracle = await connection.execute(`
         SELECT ID ,FACTORY ,LINE ,LOCATION ,NAME_MACHINE ,MODEL_NAME ,SERIAL_NUMBER ,FORCE_1 ,FORCE_2 ,FORCE_3 ,FORCE_4 ,STATE ,
           TO_CHAR(time_update, 'YYYY-MM-DD HH24:MI:SS') AS time_update
@@ -140,8 +140,8 @@ const ScrewController = {
         req.body.type === "Screw"
           ? "screw_force_info"
           : req.body.type === "Glue"
-          ? "glue_force_info"
-          : "shielding_cover_force_info";
+            ? "glue_force_info"
+            : "shielding_cover_force_info";
       const forceSelect =
         req.body.type === "Glue"
           ? `FORCE_1 ,FORCE_2 ,FORCE_3 ,FORCE_4,FORCE_5 ,FORCE_6 ,FORCE_7 ,FORCE_8,FORCE_9 ,FORCE_10 ,FORCE_11 ,FORCE_12`
@@ -180,8 +180,8 @@ const ScrewController = {
         req.body.type === "Screw"
           ? "screw_force_info"
           : req.body.type === "Glue"
-          ? "glue_force_info"
-          : "shielding_cover_force_info";
+            ? "glue_force_info"
+            : "shielding_cover_force_info";
       connection = await req.app.locals.oraclePool.getConnection();
       const resultOracle = await connection.execute(`
         SELECT LINE,
@@ -312,7 +312,8 @@ const ScrewController = {
   uploadScrewDocumment: async (req, res) => {
     let connection;
     try {
-      const { line, type } = req.body;
+      const { line, type, name, path, factory, model, sn, slot, error } =
+        req.body;
 
       if (!req.file) {
         return res.status(400).json({ message: "Missing file" });
@@ -329,13 +330,18 @@ const ScrewController = {
       connection = await req.app.locals.oraclePool.getConnection();
       try {
         const sql = `
-        INSERT INTO SCREW_DOCUMMENT_FILE_UPLOADS (LINE, TYPE, PATH)
-        VALUES (:line, :type, :path)
+        INSERT INTO SCREW_DOCUMMENT_FILE_UPLOADS (LINE, TYPE, PATH, FACTORY, MODEL, SN, SLOT, ERROR)
+        VALUES (:line, :type, :path, :factory, :model, :sn, :slot, :error )
         RETURNING ID INTO :out_id
       `;
         const binds = {
           line,
           type,
+          factory,
+          model,
+          sn,
+          slot,
+          error,
           path: savedPath,
           out_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
         };
@@ -384,12 +390,42 @@ const ScrewController = {
   getDataScrewDocummentUpload: async (req, res) => {
     let connection;
     try {
+      const { dateFrom, dateTo } = req.body;
       connection = await req.app.locals.oraclePool.getConnection();
-      const resultOracle = await connection.execute(`
-        select ID ,LINE ,TYPE ,NAME ,PATH ,
-          to_char(CREATED_AT,'YYYY-MM-DD HH24:MI:SS') as CREATED_AT  
-        from SCREW_DOCUMMENT_FILE_UPLOADS order by id desc
-      `);
+      let sql = `select * from SCREW_DOCUMMENT_FILE_UPLOADS`;
+      const binds = {};
+      const conditions = [];
+      // if (
+      //   (dateFrom === null || dateFrom === undefined || dateFrom === "") &&
+      //   (dateTo === null || dateTo === undefined || dateTo === "")
+      // ) {
+      //   conditions.push(`CREATED_AT >= TRUNC(SYSDATE)`);
+      //   conditions.push(`CREATED_AT < TRUNC(SYSDATE) + 1`);
+      // } else {
+      //   if (dateFrom !== null && dateFrom !== undefined && dateFrom !== "") {
+      //     conditions.push(
+      //       `CREATED_AT > TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')`,
+      //     );
+      //     binds.dateFrom = dateFrom;
+      //   }
+
+      //   if (dateTo !== null && dateTo !== undefined && dateTo !== "") {
+      //     conditions.push(
+      //       `CREATED_AT < TO_DATE(:dateTo, 'YYYY-MM-DD HH24:MI:SS')`,
+      //     );
+      //     binds.dateTo = dateTo;
+      //   }
+      // }
+      if (conditions.length > 0) {
+        sql += ` WHERE ` + conditions.join(" AND ");
+      }
+
+      const resultOracle = await connection.execute(sql, binds);
+      // const resultOracle = await connection.execute(`
+      //   select ID ,LINE ,TYPE ,PATH ,FACTORY, MODEL, SN, SLOT,
+      //     to_char(CREATED_AT,'YYYY-MM-DD HH24:MI:SS') as CREATED_AT
+      //   from SCREW_DOCUMMENT_FILE_UPLOADS order by id desc
+      // `);
       return res.json(resultOracle.rows);
     } catch (err) {
       console.error("Error fetching getDataScrewDocummentUpload: ", err);

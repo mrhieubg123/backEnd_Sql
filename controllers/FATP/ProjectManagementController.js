@@ -24,6 +24,58 @@ const ProjectManagementController = {
     }
   },
 
+  getListProjectManagementByStatus: async (req, res) => {
+    let connection;
+    try {
+      connection = await req.app.locals.oraclePool.getConnection();
+      const { status, dateTo, dateFrom } = req.body;
+
+      let sql = `select * from FATP_PROJECT_MANAGEMENT`;
+      const binds = {};
+      const conditions = [];
+
+      if (status !== null && status !== undefined && status !== "") {
+        conditions.push(`status = :status`);
+        binds.status = status;
+      }
+
+      if (
+        (dateFrom === null || dateFrom === undefined || dateFrom === "") &&
+        (dateTo === null || dateTo === undefined || dateTo === "")
+      ) {
+        conditions.push(`
+        CREATED_AT >= TRUNC(SYSDATE, 'YYYY')
+        AND CREATED_AT < ADD_MONTHS(TRUNC(SYSDATE, 'YYYY'), 12)
+      `);
+      } else {
+        if (dateFrom !== null && dateFrom !== undefined && dateFrom !== "") {
+          conditions.push(`CREATED_AT > TO_DATE(:dateFrom, 'YYYY-MM-DD')`);
+          binds.dateFrom = dateFrom;
+        }
+
+        if (dateTo !== null && dateTo !== undefined && dateTo !== "") {
+          conditions.push(`CREATED_AT < TO_DATE(:dateTo, 'YYYY-MM-DD')`);
+          binds.dateTo = dateTo;
+        }
+      }
+
+      if (conditions.length > 0) {
+        sql += ` WHERE ` + conditions.join(" AND ");
+      }
+
+      const resultOracle = await connection.execute(sql, binds);
+
+      return res.json(resultOracle.rows);
+    } catch (err) {
+      console.error("Error fetching getListProjectManagementByStatus: ", err);
+      return res.status(500).json({ msg: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+
   getEmailConfig: async (req, res) => {
     let connection;
     try {
@@ -44,15 +96,45 @@ const ProjectManagementController = {
 
   addNewProject: async (req, res) => {
     let connection;
+    const listStatus = ["RFQ", "NPI Projects", "MP Projects", "EOL"];
+    const status = req.body.status || "RFQ";
+    const currentIndex = listStatus.indexOf(status);
+
+    let oldStatus = status;
+
+    if (currentIndex > 0) {
+      oldStatus = listStatus[currentIndex - 1];
+    }
+
     try {
+      const { project } = req.body;
       connection = await req.app.locals.oraclePool.getConnection();
-      const resultOracle = await connection.execute(`
-        INSERT INTO FATP_PROJECT_MANAGEMENT 
-        (PROJECT_NAME, CCEMAIL, PROJECT, CREATOR, STATUS) VALUES 
-        (N'${req.body.projectName}','${req.body.ccEmail}','${req.body.project}',
-          '${req.body.creator}','${req.body.status||"RFQ"}')
-      `);
-      await connection.commit();
+
+      await connection.execute(
+        `
+        INSERT INTO FATP_PROJECT_MANAGEMENT
+        (PROJECT, STATUS)
+        VALUES
+        (:project, :status)
+      `,
+        { project, status },
+        {
+          autoCommit: true,
+        },
+      );
+      if (status !== "RFQ")
+        await connection.execute(
+          `
+          UPDATE FATP_PROJECT_MANAGEMENT
+          SET END_TIME = SYSDATE
+          WHERE PROJECT = :project and STATUS = :oldStatus and END_TIME IS NULL
+        `,
+          { project, oldStatus },
+          {
+            autoCommit: true,
+          },
+        );
+
       return res.json({ success: true, message: `Đã thêm vào bảng` });
     } catch (err) {
       console.error("Error addNewProject: ", err);
@@ -68,7 +150,8 @@ const ProjectManagementController = {
     let connection;
     try {
       const basePath = path.join(__dirname, "../..", "fileUploads");
-      const { headerParts, oldStatus, status, name, oldName } = req.body;
+      const { headerParts, oldStatus, status, name, oldName, endTime } =
+        req.body;
 
       const srcPath = path.join(basePath, headerParts, oldStatus, oldName); // vd: ProjectManagement/RFQ/CWA...
       const destPath = path.join(basePath, headerParts, status, name); // vd: ProjectManagement/NPI Projects/CWA...
@@ -79,11 +162,20 @@ const ProjectManagementController = {
       await connection.execute(
         `
       UPDATE FATP_PROJECT_MANAGEMENT
-      SET PROJECT = :name, STATUS = :status
-      WHERE PROJECT = :oldName
+      SET PROJECT = :name, END_TIME = :endTime
+      WHERE PROJECT = :oldName and STATUS = :oldStatus
       `,
-        { name, status, oldName },
-        { autoCommit: true }
+        { name, endTime, oldName, oldStatus },
+        { autoCommit: true },
+      );
+
+      await connection.execute(
+        `
+      INSERT INTO FATP_PROJECT_MANAGEMENT 
+        (PROJECT, STATUS) VALUES (:name,:status)
+      `,
+        { name, status },
+        { autoCommit: true },
       );
 
       // ✅ tạo folder cha của destination
@@ -368,16 +460,43 @@ module.exports = ProjectManagementController;
 //     NAME NVARCHAR2(100),
 //     EMAIL NVARCHAR2(100),
 //     CCEMAIL NVARCHAR2(100),
-//     PROJECT NVARCHAR2(500), 
+//     PROJECT NVARCHAR2(500),
 //     CONSTRAINT PK_FATP_EMAIL_CONFIG PRIMARY KEY (ID)
-// )	
+// )
 // CREATE TABLE FATP_PROJECT_MANAGEMENT (
 //     ID NUMBER GENERATED BY DEFAULT AS IDENTITY NOT NULL,
 //     PROJECT_NAME NVARCHAR2(100),
 //     CCEMAIL NVARCHAR2(100),
-//     PROJECT NVARCHAR2(500), 
+//     PROJECT NVARCHAR2(500),
 //     STATUS NVARCHAR2(100),
-//     CREATED_AT TIMESTAMP(0) 
+//     CREATED_AT TIMESTAMP(0)
 //                          DEFAULT CAST(SYSTIMESTAMP AS TIMESTAMP(0)) NOT NULL,
 //     CONSTRAINT PK_FATP_PROJECT_MANAGEMENT PRIMARY KEY (ID)
-// )	
+// )
+// CREATE TABLE FATP_MACHINE_FPY_DATA (
+//     ID NUMBER GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+//     LINE VARCHAR2(50),
+//     LOCATION VARCHAR2(50),
+//     CATEGORY VARCHAR2(50),
+//     MACHINE_TYPE VARCHAR2(50),
+//     MACHINE_NAME VARCHAR2(50),
+//     CAPACITY NUMBER(12,0),
+//     CYCLE_TIME FLOAT,
+//     FPY FLOAT,
+//     CREATED_AT TIMESTAMP(0)
+//                          DEFAULT CAST(SYSTIMESTAMP AS TIMESTAMP(0)) NOT NULL,
+//     CONSTRAINT FATP_MACHINE_FPY_DATA PRIMARY KEY (ID)
+// )
+
+// ID	NUMBER	No	"PTHNEW"."ISEQ$$_79449".nextval
+// LINE	VARCHAR2(50 BYTE)	No
+// TYPE	VARCHAR2(50 BYTE)	No
+// NAME	VARCHAR2(255 BYTE)	Yes
+// PATH	VARCHAR2(1024 BYTE)	No
+// CREATED_AT	TIMESTAMP(6)	Yes	SYSTIMESTAMP
+// FACTORY	VARCHAR2(100 BYTE)	Yes
+// MODEL	VARCHAR2(100 BYTE)	Yes
+// SN	VARCHAR2(100 BYTE)	Yes
+// SLOT	VARCHAR2(500 BYTE)	Yes
+// ERROR	VARCHAR2(1024 BYTE)	Yes
+// STATE	VARCHAR2(50 BYTE)	Yes

@@ -4,6 +4,7 @@ const ProjectManagementController = require("../controllers/FATP/ProjectManageme
 const router = require("express").Router();
 
 router.get("/getListProjectManagement", ProjectManagementController.getListProjectManagement);
+router.post("/getListProjectManagementByStatus", ProjectManagementController.getListProjectManagementByStatus);
 router.get("/getEmailConfig", ProjectManagementController.getEmailConfig);
 router.post("/addNewProject", ProjectManagementController.addNewProject);
 router.post("/editProject", ProjectManagementController.editProject);

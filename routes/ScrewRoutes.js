@@ -12,7 +12,7 @@ router.post("/addDataForceDefault", ScrewController.addDataForceDefault);
 router.post("/editDataForceDefault", ScrewController.editDataForceDefault);
 router.post("/deleteDataForceDefault", ScrewController.deleteDataForceDefault);
 router.post('/uploadScrewDocumment', upload.single('file'), ScrewController.uploadScrewDocumment);
-router.get("/getDataScrewDocummentUpload", ScrewController.getDataScrewDocummentUpload);
+router.post("/getDataScrewDocummentUpload", ScrewController.getDataScrewDocummentUpload);
 router.post("/deleteScrewDocummentUpload", ScrewController.deleteScrewDocummentUpload);
 router.get("/downloadScrewDocummentUpload", ScrewController.downloadScrewDocummentUpload);
 

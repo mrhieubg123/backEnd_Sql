@@ -19,7 +19,7 @@ cron.schedule(
       });
       const buffer = await MaintananceController.buildExcelBuffer2(result);
       const filename = `ReportAnalysisMachine.xlsx`;
-      MaintananceController.sendEmailWithOptionalIcs({
+      await MaintananceController.sendEmailWithOptionalIcs({
         toList: [
           "cpe-vn-me-automation@mail.foxconn.com",
           "felix.wh.li@mail.foxconn.com",
@@ -71,7 +71,7 @@ cron.schedule(
         })}] ✅ Job cảnh báo bảo dưỡng chạy thành công!`
       );
       const lineMaintenance = await MaintananceController.fetchMaintenancesD3();
-        console.log(lineMaintenance);
+      console.log(lineMaintenance);
       if (lineMaintenance.length == 0) {
         console.log("[MAINT] Không có lịch D+3 hôm nay.");
         return;
@@ -83,7 +83,7 @@ cron.schedule(
       });
       const buffer = await MaintananceController.buildExcelBuffer2(result);
       const filename = `ReportAnalysisMachine.xlsx`;
-      MaintananceController.sendEmailWithOptionalIcs({
+      await MaintananceController.sendEmailWithOptionalIcs({
         toList: [
           "cpe-vn-me-automation@mail.foxconn.com",
           "felix.wh.li@mail.foxconn.com",

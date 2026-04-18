@@ -23,7 +23,8 @@
 .env
 certificate.pem
 private-key.pem
-
+*.7z
+testText.md
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

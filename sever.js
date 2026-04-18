@@ -159,6 +159,7 @@ async function init() {
     app.locals.oraclePool = pool;
     global.oraclePool = pool;
     require("./jobs/schedule.js");
+    require("./jobs/scheduleYeildRatePTH.js");
     http.createServer(app).listen(PORT, () => {
       console.log(`Server HTTP chạy trên cổng ${PORT}`);
     });

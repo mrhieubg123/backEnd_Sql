@@ -75,7 +75,7 @@ function getCurrentShiftOnDay(date) {
   const date1cong1 = String(idate.getDate() + 1).padStart(2, "0");
   const date1tru1 = String(idate.getDate() - 1).padStart(2, "0");
   const startDayShiftcong1 = new Date(
-    `${year}-${month}-${date1cong1}T07:30:00`
+    `${year}-${month}-${date1cong1}T07:30:00`,
   );
   const startDayShifttru1 = new Date(`${year}-${month}-${date1tru1}T07:30:00`);
   // dinh nghia cac ca lam viec
@@ -156,7 +156,7 @@ function convertArrToStr(arr) {
 }
 
 const FATPController = {
-  getFATPMachineStatus: async (req, res) => { 
+  getFATPMachineStatus: async (req, res) => {
     let connection;
     try {
       //connect oracle
@@ -215,7 +215,7 @@ const FATPController = {
                 end
               )
               || '-/-' || f.error_code
-              || '-/-' || TO_CHAR(f.start_time, 'YYYY-MM-DD HH24:MI:SS') AS val
+              || '-/-' || TO_CHAR(f.start_time, 'YYYY-MM-DD HH24:MI:SS') || '-/-' || f.category AS val 
           FROM FATP_MACHINE_DATA f
           LEFT JOIN conn c
             ON c.line = f.line
@@ -242,6 +242,479 @@ const FATPController = {
     }
   },
 
+  getFATPMachineFPY: async (req, res) => {
+    let connection;
+    try {
+      const { line, location, dateFrom, dateTo } = req.body;
+      connection = await req.app.locals.oraclePool.getConnection();
+
+      let sql = `select * from FATP_MACHINE_FPY_DATA`;
+      const binds = {};
+      const conditions = [];
+
+      if (line !== null && line !== undefined && line !== "") {
+        conditions.push(`line = :line`);
+        binds.line = line;
+      }
+
+      if (location !== null && location !== undefined && location !== "") {
+        conditions.push(`location = :location`);
+        binds.location = location;
+      }
+
+      if (
+        (dateFrom === null || dateFrom === undefined || dateFrom === "") &&
+        (dateTo === null || dateTo === undefined || dateTo === "")
+      ) {
+        conditions.push(`CREATED_AT >= TRUNC(SYSDATE)`);
+        conditions.push(`CREATED_AT < TRUNC(SYSDATE) + 1`);
+      } else {
+        if (dateFrom !== null && dateFrom !== undefined && dateFrom !== "") {
+          conditions.push(
+            `CREATED_AT > TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')`,
+          );
+          binds.dateFrom = dateFrom;
+        }
+
+        if (dateTo !== null && dateTo !== undefined && dateTo !== "") {
+          conditions.push(
+            `CREATED_AT < TO_DATE(:dateTo, 'YYYY-MM-DD HH24:MI:SS')`,
+          );
+          binds.dateTo = dateTo;
+        }
+      }
+
+      if (conditions.length > 0) {
+        sql += ` WHERE ` + conditions.join(" AND ");
+      }
+
+      const resultOracle = await connection.execute(sql, binds);
+
+      return res.json(resultOracle.rows);
+    } catch (err) {
+      console.error("Error fetching getFATPMachineFPY: ", err);
+      return res.status(500).json({ msg: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+
+  getMinCycleTimeAndLatestRow: async (req, res) => {
+    let connection;
+    try {
+      const { line, location, dateFrom, dateTo } = req.body;
+      connection = await req.app.locals.oraclePool.getConnection();
+
+      const binds = {};
+      const conditions = [];
+
+      if (line !== null && line !== undefined && line !== "") {
+        conditions.push(`LINE = :line`);
+        binds.line = line;
+      }
+
+      if (location !== null && location !== undefined && location !== "") {
+        conditions.push(`LOCATION = :location`);
+        binds.location = location;
+      }
+
+      if (
+        (dateFrom === null || dateFrom === undefined || dateFrom === "") &&
+        (dateTo === null || dateTo === undefined || dateTo === "")
+      ) {
+        conditions.push(`CREATED_AT >= TRUNC(SYSDATE)`);
+        conditions.push(`CREATED_AT < TRUNC(SYSDATE) + 1`);
+      } else {
+        if (dateFrom !== null && dateFrom !== undefined && dateFrom !== "") {
+          conditions.push(
+            `CREATED_AT > TO_TIMESTAMP(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')`,
+          );
+          binds.dateFrom = dateFrom;
+        }
+
+        if (dateTo !== null && dateTo !== undefined && dateTo !== "") {
+          conditions.push(
+            `CREATED_AT < TO_TIMESTAMP(:dateTo, 'YYYY-MM-DD HH24:MI:SS')`,
+          );
+          binds.dateTo = dateTo;
+        }
+      }
+
+      const whereClause =
+        conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+      const sql = `
+      SELECT *
+      FROM (
+        SELECT
+          'MIN_CYCLE_TIME' AS ROW_TYPE,
+          t.ID,
+          t.LINE,
+          t.LOCATION,
+          t.CATEGORY,
+          t.MACHINE_TYPE,
+          t.MACHINE_NAME,
+          t.CYCLE_TIME,
+          t.CREATED_AT,
+          t.PASS,
+          t.FAIL
+        FROM FATP_MACHINE_FPY_DATA t
+        ${whereClause}
+        ORDER BY t.CYCLE_TIME ASC NULLS LAST, t.CREATED_AT DESC
+      )
+      WHERE ROWNUM = 1
+
+      UNION ALL
+
+      SELECT *
+      FROM (
+        SELECT
+          'LATEST_CREATED_AT' AS ROW_TYPE,
+          t.ID,
+          t.LINE,
+          t.LOCATION,
+          t.CATEGORY,
+          t.MACHINE_TYPE,
+          t.MACHINE_NAME,
+          t.CYCLE_TIME,
+          t.CREATED_AT,
+          t.PASS,
+          t.FAIL
+        FROM FATP_MACHINE_FPY_DATA t
+        ${whereClause}
+        ORDER BY t.CREATED_AT DESC
+      )
+      WHERE ROWNUM = 1
+    `;
+
+      const resultOracle = await connection.execute(sql, binds);
+
+      const minCycleTimeRow = resultOracle.rows.find(
+        (row) => row.ROW_TYPE === "MIN_CYCLE_TIME",
+      );
+      const latestCreatedAtRow = resultOracle.rows.find(
+        (row) => row.ROW_TYPE === "LATEST_CREATED_AT",
+      );
+
+      return res.json({
+        minCycleTimeRow: minCycleTimeRow || null,
+        latestCreatedAtRow: latestCreatedAtRow || null,
+      });
+    } catch (err) {
+      console.error("Error fetching getMinCycleTimeAndLatestRow: ", err);
+      return res.status(500).json({ msg: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+
+  getMachineWeeklyDrilldownData: async (req, res) => {
+    let connection;
+    try {
+      const { line, location } = req.body;
+      connection = await req.app.locals.oraclePool.getConnection();
+
+      const executeOptions = {
+        outFormat: req.app.locals.oracledb?.OUT_FORMAT_OBJECT || undefined,
+      };
+
+      const daySql = `
+      WITH raw_data AS (
+        SELECT
+          t.PASS,
+          t.FAIL,
+          t.CREATED_AT,
+          CASE
+            WHEN TO_CHAR(t.CREATED_AT, 'HH24MI') >= '0730' THEN TRUNC(t.CREATED_AT)
+            ELSE TRUNC(t.CREATED_AT) - 1
+          END AS production_date
+        FROM FATP_MACHINE_FPY_DATA t
+        WHERE t.LINE = :line
+          AND t.LOCATION = :location
+      ),
+      calendar_days AS (
+        SELECT (TRUNC(TRUNC(SYSDATE), 'IW') - 21) + (LEVEL - 1) AS production_date
+        FROM dual
+        CONNECT BY LEVEL <= 28
+      ),
+      grouped_days AS (
+        SELECT
+          production_date,
+          TRUNC(production_date, 'IW') AS week_start,
+          NVL(SUM(PASS), 0) AS pass_sum,
+          NVL(SUM(FAIL), 0) AS fail_sum,
+          NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0) AS output,
+          CASE
+            WHEN (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0)) = 0 THEN 0
+            ELSE NVL(SUM(FAIL), 0) / (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0))
+          END AS fail_rate
+        FROM raw_data
+        GROUP BY production_date
+      )
+      SELECT
+        c.production_date,
+        TRUNC(c.production_date, 'IW') AS week_start,
+        NVL(g.pass_sum, 0) AS pass_sum,
+        NVL(g.fail_sum, 0) AS fail_sum,
+        NVL(g.output, 0) AS output,
+        NVL(g.fail_rate, 0) AS fail_rate
+      FROM calendar_days c
+      LEFT JOIN grouped_days g
+        ON c.production_date = g.production_date
+      ORDER BY c.production_date
+    `;
+
+      const hourSql = `
+      WITH raw_data AS (
+        SELECT
+          t.PASS,
+          t.FAIL,
+          t.CREATED_AT,
+          CASE
+            WHEN TO_CHAR(t.CREATED_AT, 'HH24MI') >= '0730' THEN TRUNC(t.CREATED_AT)
+            ELSE TRUNC(t.CREATED_AT) - 1
+          END AS production_date,
+          FLOOR(
+            (
+              CAST(t.CREATED_AT AS DATE)
+              - (
+                  CASE
+                    WHEN TO_CHAR(t.CREATED_AT, 'HH24MI') >= '0730' THEN TRUNC(t.CREATED_AT)
+                    ELSE TRUNC(t.CREATED_AT) - 1
+                  END
+                  + (7.5 / 24)
+                )
+            ) * 24
+          ) AS hour_no
+        FROM FATP_MACHINE_FPY_DATA t
+        WHERE t.LINE = :line
+          AND t.LOCATION = :location
+      ),
+      filtered AS (
+        SELECT *
+        FROM raw_data
+        WHERE hour_no BETWEEN 0 AND 23
+      ),
+      calendar_days AS (
+        SELECT (TRUNC(TRUNC(SYSDATE), 'IW') - 21) + (LEVEL - 1) AS production_date
+        FROM dual
+        CONNECT BY LEVEL <= 28
+      ),
+      calendar_hours AS (
+        SELECT LEVEL - 1 AS hour_no
+        FROM dual
+        CONNECT BY LEVEL <= 24
+      ),
+      grouped_hours AS (
+        SELECT
+          production_date,
+          TRUNC(production_date, 'IW') AS week_start,
+          hour_no,
+          NVL(SUM(PASS), 0) AS pass_sum,
+          NVL(SUM(FAIL), 0) AS fail_sum,
+          NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0) AS output,
+          CASE
+            WHEN (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0)) = 0 THEN 0
+            ELSE NVL(SUM(FAIL), 0) / (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0))
+          END AS fail_rate
+        FROM filtered
+        GROUP BY production_date, hour_no
+      )
+      SELECT
+        d.production_date,
+        TRUNC(d.production_date, 'IW') AS week_start,
+        h.hour_no,
+        NVL(g.pass_sum, 0) AS pass_sum,
+        NVL(g.fail_sum, 0) AS fail_sum,
+        NVL(g.output, 0) AS output,
+        NVL(g.fail_rate, 0) AS fail_rate
+      FROM calendar_days d
+      CROSS JOIN calendar_hours h
+      LEFT JOIN grouped_hours g
+        ON d.production_date = g.production_date
+       AND h.hour_no = g.hour_no
+      ORDER BY d.production_date, h.hour_no
+    `;
+
+      const [dayResult, hourResult] = await Promise.all([
+        connection.execute(daySql, { line, location }, executeOptions),
+        connection.execute(hourSql, { line, location }, executeOptions),
+      ]);
+
+      const dayRows = dayResult.rows || [];
+      const hourRows = hourResult.rows || [];
+
+      const formatDate = (date) => {
+        const d = new Date(date);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      };
+
+      const formatHour = (hourNo) => {
+        const h = (7 + hourNo) % 24;
+        return `${String(h).padStart(2, "0")}:30`;
+      };
+
+      const dailyMap = new Map();
+
+      dayRows.forEach((row) => {
+        const key = formatDate(row.PRODUCTION_DATE);
+        dailyMap.set(key, {
+          day: key,
+          weekStart: formatDate(row.WEEK_START),
+          passSum: Number(row.PASS_SUM || 0),
+          failSum: Number(row.FAIL_SUM || 0),
+          value: Number(row.OUTPUT || 0),
+          failRate: Number(row.FAIL_RATE || 0),
+          hours: [],
+        });
+      });
+
+      hourRows.forEach((row) => {
+        const key = formatDate(row.PRODUCTION_DATE);
+        const dayItem = dailyMap.get(key);
+        if (!dayItem) return;
+
+        dayItem.hours.push({
+          hourNo: Number(row.HOUR_NO),
+          time: formatHour(Number(row.HOUR_NO)),
+          passSum: Number(row.PASS_SUM || 0),
+          failSum: Number(row.FAIL_SUM || 0),
+          value: Number(row.OUTPUT || 0),
+          failRate: Number(row.FAIL_RATE || 0),
+        });
+      });
+
+      const weekMap = new Map();
+
+      dailyMap.forEach((d) => {
+        if (!weekMap.has(d.weekStart)) {
+          weekMap.set(d.weekStart, {
+            weekStart: d.weekStart,
+            totalFail: 0,
+            value: 0,
+            days: [],
+          });
+        }
+
+        const w = weekMap.get(d.weekStart);
+        w.totalFail += d.failSum;
+        w.value += d.value;
+
+        w.days.push({
+          day: d.day,
+          value: d.value,
+          failRate: d.failRate,
+          hours: d.hours
+            .sort((a, b) => a.hourNo - b.hourNo)
+            .map(({ hourNo, passSum, failSum, ...rest }) => rest),
+        });
+      });
+
+      const getISOWeek = (dateStr) => {
+        const d = new Date(dateStr);
+        const target = new Date(
+          Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()),
+        );
+        const dayNr = (target.getUTCDay() + 6) % 7;
+        target.setUTCDate(target.getUTCDate() - dayNr + 3);
+        const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+        const firstDayNr = (firstThursday.getUTCDay() + 6) % 7;
+        firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNr + 3);
+        return String(
+          1 + Math.round((target - firstThursday) / 604800000),
+        ).padStart(2, "0");
+      };
+
+      const weeklyData = Array.from(weekMap.values())
+        .sort((a, b) => new Date(a.weekStart) - new Date(b.weekStart))
+        .map((w) => ({
+          week: `W${getISOWeek(w.weekStart)}`,
+          value: w.value,
+          failRate: w.value === 0 ? 0 : w.totalFail / w.value,
+          days: w.days.sort((a, b) => new Date(a.day) - new Date(b.day)),
+        }));
+
+      return res.json(weeklyData);
+    } catch (err) {
+      console.error("Error fetching getMachineWeeklyDrilldownData: ", err);
+      return res.status(500).json({ msg: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+
+  getMachineError5Minutes: async (req, res) => {
+    let connection;
+    try {
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+
+      if (
+        (currentHour === 11 && currentMinute >= 30) ||
+        (currentHour === 12 && currentMinute <= 30) ||
+        (currentHour === 23 && currentMinute >= 30) ||
+        (currentHour === 0 && currentMinute <= 30)
+
+      ) {
+        return res.json([]);
+      }
+
+      connection = await req.app.locals.oraclePool.getConnection();
+
+      const resultOracle = await connection.execute(
+        `
+        SELECT
+            f.line,
+            f.location,
+            f.machine_name,
+            f.error_type
+        FROM (
+            SELECT
+                x.id,
+                x.line,
+                x.location,
+                x.machine_name,
+                x.status,
+                x.error_type,
+                x.start_time,
+                ROW_NUMBER() OVER (
+                    PARTITION BY x.line, x.location, x.machine_name
+                    ORDER BY x.start_time DESC, x.id DESC
+                ) AS rn
+            FROM fatp_machine_data x
+        ) f
+        WHERE f.rn = 1
+          AND f.status = 'ERROR'
+          AND f.start_time <= (SYSDATE - NUMTODSINTERVAL(5, 'MINUTE'))
+          AND NOT EXISTS (
+              SELECT 1
+              FROM over_time_data o
+              WHERE o.line = f.line
+                AND o.type = 'Maintenance'
+                AND o.start_time < SYSDATE
+                AND SYSDATE < o.end_time
+          )
+        ORDER BY f.line, f.location, f.machine_name`,
+      );
+
+      return res.json(resultOracle.rows);
+    } catch (err) {
+      console.error("Error fetching getMachineError5Minutes: ", err);
+      return res.status(500).json({ msg: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+
   getFATPMachineTotalTrend: async (req, res) => {
     let connection;
     try {
@@ -249,8 +722,7 @@ const FATPController = {
       const sevenDayAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       connection = await req.app.locals.oraclePool.getConnection();
       console.log("getFATPMachineTotalTrend request", req.body);
-      const resultOracle =
-        await connection.execute(`
+      const resultOracle = await connection.execute(`
           WITH ot AS (
           -- Tất cả Over time (dạng TIMESTAMP)
           SELECT line,
@@ -265,19 +737,16 @@ const FATPController = {
           SELECT DateT,NVL(RUN,'0') as OK , NVL(ERROR,'0') as NG  from (
                 select STATUS,TO_CHAR(START_TIME, 'yyyy-MM-dd') as DateT,TIME 
                 FROM FATP_MACHINE_DATA f
-                where START_TIME BETWEEN TO_DATE('${
-                  req.body.dateFrom || convertDate2(sevenDayAgo) + " 00:00:00"
-                }','YYYY-MM-DD HH24:MI:SS')
-                AND TO_DATE('${
-                  req.body.dateTo || convertDate2(now) + " 23:59:59"
-                }','YYYY-MM-DD HH24:MI:SS') 
-                ${
-                  convertArrToStr(req.body.arr) === ""
-                    ? ""
-                    : `and LINE || '-M' || LOCATION in (${convertArrToStr(
-                        req.body.arr
-                      )})`
-                }
+                where START_TIME BETWEEN TO_DATE('${req.body.dateFrom || convertDate2(sevenDayAgo) + " 00:00:00"
+        }','YYYY-MM-DD HH24:MI:SS')
+                AND TO_DATE('${req.body.dateTo || convertDate2(now) + " 23:59:59"
+        }','YYYY-MM-DD HH24:MI:SS') 
+                ${convertArrToStr(req.body.arr) === ""
+          ? ""
+          : `and LINE || '-M' || LOCATION in (${convertArrToStr(
+            req.body.arr,
+          )})`
+        }
                 AND (
                   (
                         -- Loại trừ 16:30:00 đến 19:30:00
@@ -308,6 +777,53 @@ const FATPController = {
       return res.json(resultOracle.rows);
     } catch (err) {
       console.error("Error fetching users: ", err);
+      return res.status(500).json({ msg: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+
+  getFATPMachineFailureAnalysis: async (req, res) => {
+    let connection;
+    try {
+      const now = new Date();
+      const timeR = getCurrentShiftTimeRange(now);
+      const dateFrom = req.body.dateFrom || timeR.dateFrom;
+      const dateTo = req.body.dateTo || timeR.dateTo;
+      connection = await req.app.locals.oraclePool.getConnection();
+      console.log("getFATPMachineFailureAnalysis request", req.body);
+
+      const arrCondition = convertArrToStr(req.body.arr) === "" ? "" : `AND LINE || '-M' || LOCATION IN (${convertArrToStr(req.body.arr)})`;
+
+      const resultOracle = await connection.execute(`
+        SELECT 
+            LINE AS "line",
+            MACHINE_NAME AS "machine",
+            LOCATION AS "location",
+            ERROR_TYPE AS "error",
+            TO_CHAR(START_TIME, 'YYYY-MM-DD HH24:MI:SS') AS "start_time",
+            TO_CHAR(END_TIME, 'YYYY-MM-DD HH24:MI:SS') AS "end_time",
+            ROUND(NVL(TIME, (SYSDATE - START_TIME) * 24 * 60 * 60) / 60) AS "duration"
+        FROM FATP_MACHINE_DATA f
+        WHERE STATUS = 'ERROR'
+          ---AND START_TIME BETWEEN TO_DATE('${dateFrom}', 'YYYY-MM-DD HH24:MI:SS')
+                             ---AND TO_DATE('${dateTo}', 'YYYY-MM-DD HH24:MI:SS')
+          ${arrCondition}
+          AND NOT EXISTS (
+              SELECT 1
+              FROM over_time_data o
+              WHERE o.line = f.line
+                AND o.type = 'Maintenance'
+                AND o.start_time < f.start_time
+                AND f.start_time < o.end_time
+          )
+        ORDER BY START_TIME DESC
+      `);
+      return res.json(resultOracle.rows);
+    } catch (err) {
+      console.error("Error fetching getFATPMachineFailureAnalysis: ", err);
       return res.status(500).json({ msg: err.message });
     } finally {
       if (connection) {
@@ -358,19 +874,16 @@ const FATPController = {
                TO_CHAR(START_TIME - INTERVAL '30' MINUTE, 'YYYY-MM-DD') AS DateT,
                TO_CHAR(START_TIME - INTERVAL '30' MINUTE, 'HH24') || ':30' AS TimeT
         FROM FATP_MACHINE_DATA f
-        WHERE START_TIME BETWEEN TO_DATE('${
-          req.body.dateFrom || timeR.dateFrom
+        WHERE START_TIME BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
         }', 'YYYY-MM-DD HH24:MI:SS')
-          AND TO_DATE('${
-            req.body.dateTo || timeR.dateTo
-          }', 'YYYY-MM-DD HH24:MI:SS')
-          ${
-            convertArrToStr(req.body.arr) === ""
-              ? ""
-              : `AND LINE || '-M' || LOCATION IN (${convertArrToStr(
-                  req.body.arr
-                )})`
-          }
+          AND TO_DATE('${req.body.dateTo || timeR.dateTo
+        }', 'YYYY-MM-DD HH24:MI:SS')
+          ${convertArrToStr(req.body.arr) === ""
+          ? ""
+          : `AND LINE || '-M' || LOCATION IN (${convertArrToStr(
+            req.body.arr,
+          )})`
+        }
           AND (
             (
                   -- Loại trừ 16:30:00 đến 19:30:00
@@ -439,20 +952,17 @@ const FATPController = {
           SELECT * FROM FATP_ERROR_CONFIRM
       ) b
         ON a.ID = b.MACHINE_ID
-      WHERE a.START_TIME BETWEEN TO_DATE('${
-        req.body.dateFrom || timeR.dateFrom
-      }', 'YYYY-MM-DD HH24:MI:SS')
-        AND TO_DATE('${
-          req.body.dateTo || timeR.dateTo
+      WHERE a.START_TIME BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
+        }', 'YYYY-MM-DD HH24:MI:SS')
+        AND TO_DATE('${req.body.dateTo || timeR.dateTo
         }', 'YYYY-MM-DD HH24:MI:SS')
         AND a.TIME > 300
         AND a.STATUS = 'ERROR'
-        ${
-          convertArrToStr(req.body.arr) === ""
-            ? ""
-            : `AND a.LINE || '-M' || a.LOCATION IN (${convertArrToStr(
-                req.body.arr
-              )})`
+        ${convertArrToStr(req.body.arr) === ""
+          ? ""
+          : `AND a.LINE || '-M' || a.LOCATION IN (${convertArrToStr(
+            req.body.arr,
+          )})`
         }`);
       return res.json(resultOracle.rows);
     } catch (err) {
@@ -491,18 +1001,15 @@ const FATPController = {
                     COUNT(CAUSE) AS Total
               FROM FATP_ERROR_CONFIRM
               WHERE 
-              ${
-                req.body.error === ""
-                  ? `CONFIRM_TIME BETWEEN TO_DATE('${
-                      req.body.dateFrom ||
-                      convertDate2(sevenDayAgo) + " 00:00:00"
-                    }', 'YYYY-MM-DD HH24:MI:SS')
-                    AND TO_DATE('${
-                      req.body.dateTo || convertDate2(now) + " 23:59:59"
-                    }', 'YYYY-MM-DD HH24:MI:SS')
+              ${req.body.error === ""
+          ? `CONFIRM_TIME BETWEEN TO_DATE('${req.body.dateFrom ||
+          convertDate2(sevenDayAgo) + " 00:00:00"
+          }', 'YYYY-MM-DD HH24:MI:SS')
+                    AND TO_DATE('${req.body.dateTo || convertDate2(now) + " 23:59:59"
+          }', 'YYYY-MM-DD HH24:MI:SS')
                     AND`
-                  : ""
-              }
+          : ""
+        }
               ERROR_CODE LIKE '${req.body.error || ""}%'
               GROUP BY ERROR_CODE, ERROR_TYPE, CAUSE, SOLUTION
           ) bang2
@@ -546,17 +1053,14 @@ const FATPController = {
               TO_CHAR(END_TIME, 'YYYY-MM-DD HH24:MI:SS') AS END_TIME,
               TIME,ERROR_CODE, ERROR_TYPE 
               FROM FATP_MACHINE_DATA f
-        where START_TIME BETWEEN TO_DATE('${
-                req.body.dateFrom || timeR.dateFrom
-              }', 'YYYY-MM-DD HH24:MI:SS')
-              AND TO_DATE('${
-                req.body.dateTo || timeR.dateTo
-              }', 'YYYY-MM-DD HH24:MI:SS') and STATUS like 'ERROR' 
-              ${
-                convertArrToStr(req.body.arr) === ""
-                  ? ""
-                  : `and LINE || '-M' || LOCATION in (${convertArrToStr(req.body.arr)})`
-              }
+        where START_TIME BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
+        }', 'YYYY-MM-DD HH24:MI:SS')
+              AND TO_DATE('${req.body.dateTo || timeR.dateTo
+        }', 'YYYY-MM-DD HH24:MI:SS') and STATUS like 'ERROR' 
+              ${convertArrToStr(req.body.arr) === ""
+          ? ""
+          : `and LINE || '-M' || LOCATION in (${convertArrToStr(req.body.arr)})`
+        }
               AND (
                 (
                       -- Loại trừ 16:30:00 đến 19:30:00
@@ -603,7 +1107,7 @@ const FATPController = {
         select ID ,LINE ,SHIFT_NAME ,
           TO_CHAR(START_TIME, 'YYYY-MM-DD HH24:MI:SS') AS START_TIME,
           TO_CHAR(END_TIME, 'YYYY-MM-DD HH24:MI:SS') AS END_TIME,
-        TYPE ,ID_CONFIRM ,"Comment" from over_time_data
+        TYPE ,ID_CONFIRM ,"Comment" from over_time_data order by id desc
       `);
       return res.json(resultOracle.rows);
     } catch (err) {
@@ -632,9 +1136,8 @@ const FATPController = {
         (N'${req.body.line}',
           TO_TIMESTAMP('${startTime}', 'YYYY-MM-DD HH24:MI:SS.FF3'), 
           TO_TIMESTAMP('${endTime}', 'YYYY-MM-DD HH24:MI:SS.FF3'), 
-          N'${req.body.type}',N'${req.body.idConfirm || ""}','${
-        req.body.comment || ""
-      }')
+          N'${req.body.type}',N'${req.body.idConfirm || ""}','${req.body.comment || ""
+        }')
       `);
       await connection.commit();
       return res.json({ success: true, message: `Đã thêm vào bảng` });
