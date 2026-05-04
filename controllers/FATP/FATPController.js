@@ -155,7 +155,37 @@ function convertArrToStr(arr) {
   return queryArray.length > 0 ? arr.map((item) => `'${item}'`).join(`,`) : "";
 }
 
+async function getHeartBeatLine() {
+  const sql = `
+    SELECT line, TO_CHAR(MAX(datetime), 'YYYY-MM-DD HH24:MI:SS') AS last_dt
+    FROM FATP_MACHINE_DATA_CONNECT
+    WHERE line IS NOT NULL
+    GROUP BY line
+    HAVING MAX(datetime) < (SYSTIMESTAMP - INTERVAL '22' MINUTE)`;
+
+  const pool = global.oraclePool;
+  if (!pool) {
+    console.error("global.oraclePool is undefined");
+    return [];
+  }
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    const rs = await conn.execute(sql);
+    return rs.rows || [];
+  } catch (err) {
+    console.error("Error fetching getHeartBeatLine: ", err);
+    return [];
+  } finally {
+    if (conn) {
+      await conn.close();
+    }
+  }
+}
+
 const FATPController = {
+  getHeartBeatLine,
   getFATPMachineStatus: async (req, res) => {
     let connection;
     try {
@@ -700,6 +730,13 @@ const FATPController = {
                 AND o.type = 'Maintenance'
                 AND o.start_time < SYSDATE
                 AND SYSDATE < o.end_time
+          )
+          AND f.line IN (
+              SELECT line
+              FROM FATP_MACHINE_DATA_CONNECT
+              WHERE line IS NOT NULL
+              GROUP BY line
+              HAVING max(datetime) > (SYSTIMESTAMP - INTERVAL '22' MINUTE)
           )
         ORDER BY f.line, f.location, f.machine_name`,
       );
