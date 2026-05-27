@@ -161,7 +161,7 @@ async function getHeartBeatLine() {
     FROM FATP_MACHINE_DATA_CONNECT
     WHERE line IS NOT NULL
     GROUP BY line
-    HAVING MAX(datetime) < (SYSTIMESTAMP - INTERVAL '22' MINUTE)`;
+    HAVING MAX(datetime) < (DATEADD(minute, -22, CURRENT_TIMESTAMP))`;
 
   const pool = global.oraclePool;
   if (!pool) {
@@ -189,15 +189,11 @@ const FATPController = {
   getFATPMachineStatus: async (req, res) => {
     let connection;
     try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
-      const factoryCondition2 = `f.factory='${factory}'`;
-
       //connect oracle
       connection = await req.app.locals.oraclePool.getConnection();
       // 1. Lấy danh sách distinct location
       const locResult = await connection.execute(`
-        SELECT DISTINCT location FROM PTHNEW.FATP_MACHINE_DATA where ${factoryCondition1} order by TO_NUMBER(LOCATION)
+        SELECT DISTINCT location FROM PTHNEW.FATP_MACHINE_DATA order by CAST(LOCATION AS INT)
       `);
 
       // 2. Xây chuỗi location cho pivot
@@ -208,19 +204,18 @@ const FATPController = {
           SELECT line,
                 MAX(datetime) AS last_dt
           FROM FATP_MACHINE_DATA_CONNECT
-          where ${factoryCondition1}
           GROUP BY line
         )
         SELECT *
         FROM (
           SELECT
               f.line,
-              'M' || f.location AS loc,
+              'M' + CAST(f.location AS VARCHAR(MAX)) AS loc,
               (
                 CASE
                   -- Line mất heartbeat > 15 phút => OFF toàn line
                   ---WHEN c.last_dt IS NULL
-                  ---    OR c.last_dt < (SYSTIMESTAMP - INTERVAL '22' MINUTE)
+                  ---    OR c.last_dt < (DATEADD(minute, -22, CURRENT_TIMESTAMP))
                   ---THEN 'OFF'
 
                   -- Line đang Maintenance => OFF
@@ -228,34 +223,33 @@ const FATPController = {
                     SELECT 1
                     FROM OVER_TIME_DATA o
                     WHERE o.line = f.line
-                      AND f.factory = o.factory
                       AND o.type = 'Maintenance'
-                      AND SYSTIMESTAMP BETWEEN o.start_time
-                                          AND NVL(o.end_time, TIMESTAMP '9999-12-31 23:59:59')
+                      AND CURRENT_TIMESTAMP BETWEEN o.start_time
+                                          AND ISNULL(o.end_time, '9999-12-31 23:59:59')
                   )
                   THEN 'OFF'
 
-                  ELSE f.status
+                  ELSE ISNULL(CAST(f.status AS VARCHAR(MAX)), '')
                 END
               )
-              || '-/-' || f.machine_type
-              || '-/-' || f.machine_name
-              || '-/-' || 
+              + '-/-' + ISNULL(CAST(f.machine_type AS VARCHAR(MAX)), '')
+              + '-/-' + ISNULL(CAST(f.machine_name AS VARCHAR(MAX)), '')
+              + '-/-' + 
               ( 
                 case 
                   -- Line mất heartbeat > 15 phút => OFF toàn line
                   WHEN c.last_dt IS NULL
-                      OR c.last_dt < (SYSTIMESTAMP - INTERVAL '22' MINUTE)
+                      OR c.last_dt < (DATEADD(minute, -22, CURRENT_TIMESTAMP))
                   THEN 'Program turn off'
-                  else f.error_type
+                  else ISNULL(CAST(f.error_type AS VARCHAR(MAX)), '')
                 end
               )
-              || '-/-' || f.error_code
-              || '-/-' || TO_CHAR(f.start_time, 'YYYY-MM-DD HH24:MI:SS') || '-/-' || f.category AS val 
+              + '-/-' + ISNULL(CAST(f.error_code AS VARCHAR(MAX)), '')
+              + '-/-' + ISNULL(FORMAT(f.start_time, 'yyyy-MM-dd HH:mm:ss'), '') + '-/-' + ISNULL(CAST(f.category AS VARCHAR(MAX)), '') AS val 
           FROM FATP_MACHINE_DATA f
           LEFT JOIN conn c
             ON c.line = f.line
-          WHERE ${factoryCondition2} and f.start_time = (
+          WHERE f.start_time = (
             SELECT MAX(f2.start_time)
             FROM FATP_MACHINE_DATA f2
             WHERE f2.line = f.line
@@ -264,7 +258,7 @@ const FATPController = {
         ) src
         PIVOT (
           MAX(val) FOR loc IN (${pivotCols})
-        )
+        ) AS pvt
         ORDER BY line
         `);
       return res.json(resultOracle.rows);
@@ -281,21 +275,20 @@ const FATPController = {
   getFATPMachineFPY: async (req, res) => {
     let connection;
     try {
-      const { line, location, dateFrom, dateTo, factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
+      const { line, location, dateFrom, dateTo } = req.body;
       connection = await req.app.locals.oraclePool.getConnection();
 
       let sql = `select * from FATP_MACHINE_FPY_DATA`;
       const binds = {};
-      const conditions = [`${factoryCondition1}`];
+      const conditions = [];
 
       if (line !== null && line !== undefined && line !== "") {
-        conditions.push(`line = :line`);
+        conditions.push(`line = @line`);
         binds.line = line;
       }
 
       if (location !== null && location !== undefined && location !== "") {
-        conditions.push(`location = :location`);
+        conditions.push(`location = @location`);
         binds.location = location;
       }
 
@@ -303,19 +296,19 @@ const FATPController = {
         (dateFrom === null || dateFrom === undefined || dateFrom === "") &&
         (dateTo === null || dateTo === undefined || dateTo === "")
       ) {
-        conditions.push(`CREATED_AT >= TRUNC(SYSDATE)`);
-        conditions.push(`CREATED_AT < TRUNC(SYSDATE) + 1`);
+        conditions.push(`CREATED_AT >= CAST(GETDATE() AS DATE)`);
+        conditions.push(`CREATED_AT < DATEADD(day, 1, CAST(GETDATE() AS DATE))`);
       } else {
         if (dateFrom !== null && dateFrom !== undefined && dateFrom !== "") {
           conditions.push(
-            `CREATED_AT > TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')`,
+            `CREATED_AT > CAST(@dateFrom AS DATETIME)`,
           );
           binds.dateFrom = dateFrom;
         }
 
         if (dateTo !== null && dateTo !== undefined && dateTo !== "") {
           conditions.push(
-            `CREATED_AT < TO_DATE(:dateTo, 'YYYY-MM-DD HH24:MI:SS')`,
+            `CREATED_AT < CAST(@dateTo AS DATETIME)`,
           );
           binds.dateTo = dateTo;
         }
@@ -341,20 +334,19 @@ const FATPController = {
   getMinCycleTimeAndLatestRow: async (req, res) => {
     let connection;
     try {
-      const { line, location, dateFrom, dateTo, factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
+      const { line, location, dateFrom, dateTo } = req.body;
       connection = await req.app.locals.oraclePool.getConnection();
 
       const binds = {};
-      const conditions = [`${factoryCondition1}`];
+      const conditions = [];
 
       if (line !== null && line !== undefined && line !== "") {
-        conditions.push(`LINE = :line`);
+        conditions.push(`LINE = @line`);
         binds.line = line;
       }
 
       if (location !== null && location !== undefined && location !== "") {
-        conditions.push(`LOCATION = :location`);
+        conditions.push(`LOCATION = @location`);
         binds.location = location;
       }
 
@@ -362,19 +354,19 @@ const FATPController = {
         (dateFrom === null || dateFrom === undefined || dateFrom === "") &&
         (dateTo === null || dateTo === undefined || dateTo === "")
       ) {
-        conditions.push(`CREATED_AT >= TRUNC(SYSDATE)`);
-        conditions.push(`CREATED_AT < TRUNC(SYSDATE) + 1`);
+        conditions.push(`CREATED_AT >= CAST(GETDATE() AS DATE)`);
+        conditions.push(`CREATED_AT < DATEADD(day, 1, CAST(GETDATE() AS DATE))`);
       } else {
         if (dateFrom !== null && dateFrom !== undefined && dateFrom !== "") {
           conditions.push(
-            `CREATED_AT > TO_TIMESTAMP(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')`,
+            `CREATED_AT > CAST(@dateFrom AS DATETIME)`,
           );
           binds.dateFrom = dateFrom;
         }
 
         if (dateTo !== null && dateTo !== undefined && dateTo !== "") {
           conditions.push(
-            `CREATED_AT < TO_TIMESTAMP(:dateTo, 'YYYY-MM-DD HH24:MI:SS')`,
+            `CREATED_AT < CAST(@dateTo AS DATETIME)`,
           );
           binds.dateTo = dateTo;
         }
@@ -453,8 +445,7 @@ const FATPController = {
   getMachineWeeklyDrilldownData: async (req, res) => {
     let connection;
     try {
-      const { line, location, factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
+      const { line, location } = req.body;
       connection = await req.app.locals.oraclePool.getConnection();
 
       const executeOptions = {
@@ -472,9 +463,8 @@ const FATPController = {
             ELSE TRUNC(t.CREATED_AT) - 1
           END AS production_date
         FROM FATP_MACHINE_FPY_DATA t
-        WHERE t.LINE = :line
-          AND t.LOCATION = :location
-          AND ${factoryCondition1}
+        WHERE t.LINE = @line
+          AND t.LOCATION = @location
       ),
       calendar_days AS (
         SELECT (TRUNC(TRUNC(SYSDATE), 'IW') - 21) + (LEVEL - 1) AS production_date
@@ -484,13 +474,13 @@ const FATPController = {
       grouped_days AS (
         SELECT
           production_date,
-          TRUNC(production_date, 'IW') AS week_start,
-          NVL(SUM(PASS), 0) AS pass_sum,
-          NVL(SUM(FAIL), 0) AS fail_sum,
-          NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0) AS output,
+          DATEADD(week, DATEDIFF(week, 0, production_date), 0) AS week_start,
+          ISNULL(SUM(PASS), 0) AS pass_sum,
+          ISNULL(SUM(FAIL), 0) AS fail_sum,
+          ISNULL(SUM(PASS), 0) + ISNULL(SUM(FAIL), 0) AS output,
           CASE
-            WHEN (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0)) = 0 THEN 0
-            ELSE NVL(SUM(FAIL), 0) / (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0))
+            WHEN (ISNULL(SUM(PASS), 0) + ISNULL(SUM(FAIL), 0)) = 0 THEN 0
+            ELSE ISNULL(SUM(FAIL), 0) / (ISNULL(SUM(PASS), 0) + ISNULL(SUM(FAIL), 0))
           END AS fail_rate
         FROM raw_data
         GROUP BY production_date
@@ -498,10 +488,10 @@ const FATPController = {
       SELECT
         c.production_date,
         TRUNC(c.production_date, 'IW') AS week_start,
-        NVL(g.pass_sum, 0) AS pass_sum,
-        NVL(g.fail_sum, 0) AS fail_sum,
-        NVL(g.output, 0) AS output,
-        NVL(g.fail_rate, 0) AS fail_rate
+        ISNULL(g.pass_sum, 0) AS pass_sum,
+        ISNULL(g.fail_sum, 0) AS fail_sum,
+        ISNULL(g.output, 0) AS output,
+        ISNULL(g.fail_rate, 0) AS fail_rate
       FROM calendar_days c
       LEFT JOIN grouped_days g
         ON c.production_date = g.production_date
@@ -531,9 +521,8 @@ const FATPController = {
             ) * 24
           ) AS hour_no
         FROM FATP_MACHINE_FPY_DATA t
-        WHERE t.LINE = :line
-          AND t.LOCATION = :location
-          AND ${factoryCondition1}
+        WHERE t.LINE = @line
+          AND t.LOCATION = @location
       ),
       filtered AS (
         SELECT *
@@ -553,26 +542,26 @@ const FATPController = {
       grouped_hours AS (
         SELECT
           production_date,
-          TRUNC(production_date, 'IW') AS week_start,
+          DATEADD(week, DATEDIFF(week, 0, production_date), 0) AS week_start,
           hour_no,
-          NVL(SUM(PASS), 0) AS pass_sum,
-          NVL(SUM(FAIL), 0) AS fail_sum,
-          NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0) AS output,
+          ISNULL(SUM(PASS), 0) AS pass_sum,
+          ISNULL(SUM(FAIL), 0) AS fail_sum,
+          ISNULL(SUM(PASS), 0) + ISNULL(SUM(FAIL), 0) AS output,
           CASE
-            WHEN (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0)) = 0 THEN 0
-            ELSE NVL(SUM(FAIL), 0) / (NVL(SUM(PASS), 0) + NVL(SUM(FAIL), 0))
+            WHEN (ISNULL(SUM(PASS), 0) + ISNULL(SUM(FAIL), 0)) = 0 THEN 0
+            ELSE ISNULL(SUM(FAIL), 0) / (ISNULL(SUM(PASS), 0) + ISNULL(SUM(FAIL), 0))
           END AS fail_rate
         FROM filtered
         GROUP BY production_date, hour_no
       )
       SELECT
         d.production_date,
-        TRUNC(d.production_date, 'IW') AS week_start,
+        DATEADD(week, DATEDIFF(week, 0, d.production_date), 0) AS week_start,
         h.hour_no,
-        NVL(g.pass_sum, 0) AS pass_sum,
-        NVL(g.fail_sum, 0) AS fail_sum,
-        NVL(g.output, 0) AS output,
-        NVL(g.fail_rate, 0) AS fail_rate
+        ISNULL(g.pass_sum, 0) AS pass_sum,
+        ISNULL(g.fail_sum, 0) AS fail_sum,
+        ISNULL(g.output, 0) AS output,
+        ISNULL(g.fail_rate, 0) AS fail_rate
       FROM calendar_days d
       CROSS JOIN calendar_hours h
       LEFT JOIN grouped_hours g
@@ -730,25 +719,24 @@ const FATPController = {
                     ORDER BY x.start_time DESC, x.id DESC
                 ) AS rn
             FROM fatp_machine_data x
-            WHERE x.factory is null
         ) f
         WHERE f.rn = 1
           AND f.status = 'ERROR'
-          AND f.start_time <= (SYSDATE - NUMTODSINTERVAL(5, 'MINUTE'))
+          AND f.start_time <= (DATEADD(minute, -5, GETDATE()))
           AND NOT EXISTS (
               SELECT 1
               FROM over_time_data o
               WHERE o.line = f.line
                 AND o.type = 'Maintenance'
-                AND o.start_time < SYSDATE
-                AND SYSDATE < o.end_time
+                AND o.start_time < GETDATE()
+                AND GETDATE() < o.end_time
           )
           AND f.line IN (
               SELECT line
               FROM FATP_MACHINE_DATA_CONNECT
               WHERE line IS NOT NULL
               GROUP BY line
-              HAVING max(datetime) > (SYSTIMESTAMP - INTERVAL '22' MINUTE)
+              HAVING max(datetime) > (DATEADD(minute, -22, CURRENT_TIMESTAMP))
           )
         ORDER BY f.line, f.location, f.machine_name`,
       );
@@ -767,8 +755,6 @@ const FATPController = {
   getFATPMachineTotalTrend: async (req, res) => {
     let connection;
     try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
       const now = new Date();
       const sevenDayAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       connection = await req.app.locals.oraclePool.getConnection();
@@ -779,32 +765,32 @@ const FATPController = {
           SELECT line,
                 start_time AS ot_start,
                 end_time AS ot_end
-          FROM over_time_data
-          WHERE ${factoryCondition1} AND TYPE = 'Over time'
-          and (TO_CHAR(START_TIME, 'YYYY-MM-DD') = TO_CHAR(TO_DATE('${req.body.dateFrom || convertDate2(sevenDayAgo)}', 'YYYY-MM-DD HH24:MI:SS'), 'YYYY-MM-DD')
-            or TO_CHAR(START_TIME, 'YYYY-MM-DD') = TO_CHAR(TO_DATE('${req.body.dateTo || convertDate2(now)}', 'YYYY-MM-DD HH24:MI:SS'), 'YYYY-MM-DD')
+          FROM   over_time_data
+          WHERE  TYPE = 'Over time'
+          and (CONVERT(VARCHAR(10), START_TIME, 120) = CONVERT(VARCHAR(10), CAST('${req.body.dateFrom || convertDate2(sevenDayAgo)}'' AS DATETIME), 120)
+            or CONVERT(VARCHAR(10), START_TIME, 120) = CONVERT(VARCHAR(10), CAST('${req.body.dateTo || convertDate2(now)}'' AS DATETIME), 120)
           )
         )
-          SELECT DateT,NVL(RUN,'0') as OK , NVL(ERROR,'0') as NG  from (
-                select STATUS,TO_CHAR(START_TIME, 'yyyy-MM-dd') as DateT,TIME 
+          SELECT DateT, ISNULL([RUN],'0') as OK , ISNULL([ERROR],'0') as NG  from (
+                select STATUS,CONVERT(VARCHAR(10), START_TIME, 120) as DateT,TIME 
                 FROM FATP_MACHINE_DATA f
-                where ${factoryCondition1} AND START_TIME BETWEEN TO_DATE('${req.body.dateFrom || convertDate2(sevenDayAgo) + " 00:00:00"
+                where START_TIME BETWEEN CAST('${req.body.dateFrom || convertDate2(sevenDayAgo) + " 00:00:00"
         }','YYYY-MM-DD HH24:MI:SS')
-                AND TO_DATE('${req.body.dateTo || convertDate2(now) + " 23:59:59"
+                AND CAST('${req.body.dateTo || convertDate2(now) + " 23:59:59"
         }','YYYY-MM-DD HH24:MI:SS') 
                 ${convertArrToStr(req.body.arr) === ""
           ? ""
-          : `and LINE || '-M' || LOCATION in (${convertArrToStr(
+          : `and LINE + '-M' + CAST(LOCATION AS VARCHAR(MAX)) in (${convertArrToStr(
             req.body.arr,
           )})`
         }
                 AND (
                   (
                         -- Loại trừ 16:30:00 đến 19:30:00
-                        TO_CHAR(START_TIME, 'HH24MI') NOT BETWEEN '1630' AND '1930'
+                        CONVERT(VARCHAR(5), START_TIME, 108) NOT BETWEEN '16:30' AND '19:30'
                               
                         -- LOẠI TRỪ VÀ KHÔNG NẰM TRONG 04:30:00 đến 07:30:00
-                        AND TO_CHAR(START_TIME, 'HH24MI') NOT BETWEEN '0400' AND '0700'
+                        AND CONVERT(VARCHAR(5), START_TIME, 108) NOT BETWEEN '04:00' AND '07:00'
                     )
                   OR
                   ---- 3) Hoặc overlap với bất kỳ Over time thực tế nào (ot)
@@ -820,12 +806,11 @@ const FATPController = {
                   SELECT 1
                   FROM   over_time_data m
                   WHERE  m.line = f.line
-                    AND m.factory = f.factory
                     AND  m.type = 'Maintenance'
                     AND  f.start_time < m.end_time
                     AND  f.start_time  > m.start_time
                 )
-                ) bang1 pivot (SUM(TIME) for STATUS in ('RUN' AS RUN, 'ERROR' AS ERROR)) bang2`);
+                ) bang1 pivot (SUM(TIME) for STATUS in ([RUN], [ERROR])) bang2`);
       return res.json(resultOracle.rows);
     } catch (err) {
       console.error("Error fetching users: ", err);
@@ -840,8 +825,6 @@ const FATPController = {
   getFATPMachineFailureAnalysis: async (req, res) => {
     let connection;
     try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
       const now = new Date();
       const timeR = getCurrentShiftTimeRange(now);
       const dateFrom = req.body.dateFrom || timeR.dateFrom;
@@ -849,7 +832,7 @@ const FATPController = {
       connection = await req.app.locals.oraclePool.getConnection();
       console.log("getFATPMachineFailureAnalysis request", req.body);
 
-      const arrCondition = convertArrToStr(req.body.arr) === "" ? "" : `AND LINE || '-M' || LOCATION IN (${convertArrToStr(req.body.arr)})`;
+      const arrCondition = convertArrToStr(req.body.arr) === "" ? "" : `AND LINE + '-M' + CAST(LOCATION AS VARCHAR(MAX)) IN (${convertArrToStr(req.body.arr)})`;
 
       const resultOracle = await connection.execute(`
         SELECT 
@@ -859,12 +842,11 @@ const FATPController = {
             ERROR_TYPE AS "error",
             TO_CHAR(START_TIME, 'YYYY-MM-DD HH24:MI:SS') AS "start_time",
             TO_CHAR(END_TIME, 'YYYY-MM-DD HH24:MI:SS') AS "end_time",
-            ROUND(NVL(TIME, (SYSDATE - START_TIME) * 24 * 60 * 60) / 60) AS "duration"
+            ROUND(ISNULL(TIME, DATEDIFF(second, START_TIME, GETDATE())) / 60.0, 0) AS "duration"
         FROM FATP_MACHINE_DATA f
         WHERE STATUS = 'ERROR'
-          AND ${factoryCondition1}
-          ---AND START_TIME BETWEEN TO_DATE('${dateFrom}', 'YYYY-MM-DD HH24:MI:SS')
-                             ---AND TO_DATE('${dateTo}', 'YYYY-MM-DD HH24:MI:SS')
+          ---AND START_TIME BETWEEN TO_DATE('${dateFrom}' AS DATETIME)
+                             ---AND TO_DATE('${dateTo}' AS DATETIME)
           ${arrCondition}
           AND NOT EXISTS (
               SELECT 1
@@ -887,53 +869,9 @@ const FATPController = {
     }
   },
 
-  getError7Day: async (req, res) => {
-    let connection;
-    try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
-      const now = new Date();
-      const sevenDayAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      connection = await req.app.locals.oraclePool.getConnection();
-      console.log("getError7Day request", req.body);
-      const resultOracle = await connection.execute(`
-        SELECT LINE AS "line",
-            MACHINE_NAME AS "machine",
-            LOCATION AS "location",
-            ERROR_TYPE AS "error",
-            TO_CHAR(START_TIME, 'YYYY-MM-DD HH24:MI:SS') AS "start_time",
-            TO_CHAR(END_TIME, 'YYYY-MM-DD HH24:MI:SS') AS "end_time",
-            ROUND(NVL(TIME, (SYSDATE - START_TIME) * 24 * 60 * 60) / 60) AS "duration"
-        FROM FATP_MACHINE_DATA f
-        WHERE STATUS = 'ERROR'
-          AND ${factoryCondition1} AND START_TIME BETWEEN TO_DATE('${convertDate2(sevenDayAgo)} 00:00:00', 'YYYY-MM-DD HH24:MI:SS')
-                             AND TO_DATE('${convertDate2(now)} 23:59:59', 'YYYY-MM-DD HH24:MI:SS')
-          AND NOT EXISTS (
-              SELECT 1
-              FROM over_time_data o
-              WHERE o.line = f.line
-                AND o.factory = f.factory
-                AND o.type = 'Maintenance'
-                AND o.start_time < f.start_time
-                AND f.start_time < o.end_time
-          )
-      `);
-      return res.json(resultOracle.rows);
-    } catch (err) {
-      console.error("Error fetching getError7Day: ", err);
-      return res.status(500).json({ msg: err.message });
-    } finally {
-      if (connection) {
-        await connection.close();
-      }
-    }
-  },
-
   getFATPMachineAnalysis: async (req, res) => {
     let connection;
     try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
       const now = new Date();
       const timeR = getCurrentShiftTimeRange(now);
       connection = await req.app.locals.oraclePool.getConnection();
@@ -946,9 +884,8 @@ const FATPController = {
                 end_time AS ot_end
           FROM   over_time_data
           WHERE  TYPE = 'Over time'
-          AND ${factoryCondition1}
-          and (TO_CHAR(START_TIME, 'YYYY-MM-DD') = TO_CHAR(TO_DATE('${req.body.dateFrom || timeR.dateFrom}', 'YYYY-MM-DD HH24:MI:SS'), 'YYYY-MM-DD')
-            or TO_CHAR(START_TIME, 'YYYY-MM-DD') = TO_CHAR(TO_DATE('${req.body.dateTo || timeR.dateTo}', 'YYYY-MM-DD HH24:MI:SS'), 'YYYY-MM-DD')
+          and (CONVERT(VARCHAR(10), START_TIME, 120) = CONVERT(VARCHAR(10), CAST('${req.body.dateFrom || timeR.dateFrom}'' AS DATETIME), 120)
+            or CONVERT(VARCHAR(10), START_TIME, 120) = CONVERT(VARCHAR(10), CAST('${req.body.dateTo || timeR.dateTo}'' AS DATETIME), 120)
           )
         )
           SELECT LINE,
@@ -968,30 +905,29 @@ const FATPController = {
                    WHEN STATUS = 'ERROR' THEN 'NG'
                    ELSE 'STOP'
                END AS STATUS,
-               NVL(TIME, 0) AS TIME,
+               ISNULL(TIME, 0) AS TIME,
                ERROR_CODE,
                ERROR_TYPE,
-               TO_CHAR(START_TIME - INTERVAL '30' MINUTE, 'YYYY-MM-DD') AS DateT,
-               TO_CHAR(START_TIME - INTERVAL '30' MINUTE, 'HH24') || ':30' AS TimeT
+               CONVERT(VARCHAR(10), DATEADD(minute, -30, START_TIME), 120) AS DateT,
+               CONVERT(VARCHAR(2), DATEADD(minute, -30, START_TIME), 108) + ':30' AS TimeT
         FROM FATP_MACHINE_DATA f
-        WHERE ${factoryCondition1} 
-        AND START_TIME BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
-        }', 'YYYY-MM-DD HH24:MI:SS')
-          AND TO_DATE('${req.body.dateTo || timeR.dateTo
-        }', 'YYYY-MM-DD HH24:MI:SS')
+        WHERE START_TIME BETWEEN CAST('${req.body.dateFrom || timeR.dateFrom
+        }' AS DATETIME)
+          AND CAST('${req.body.dateTo || timeR.dateTo
+        }' AS DATETIME)
           ${convertArrToStr(req.body.arr) === ""
           ? ""
-          : `AND LINE || '-M' || LOCATION IN (${convertArrToStr(
+          : `AND LINE + '-M' + CAST(LOCATION AS VARCHAR(MAX)) IN (${convertArrToStr(
             req.body.arr,
           )})`
         }
           AND (
             (
                   -- Loại trừ 16:30:00 đến 19:30:00
-                  TO_CHAR(START_TIME, 'HH24MI') NOT BETWEEN '1630' AND '1930'
+                  CONVERT(VARCHAR(5), START_TIME, 108) NOT BETWEEN '16:30' AND '19:30'
                         
                   -- LOẠI TRỪ VÀ KHÔNG NẰM TRONG 04:30:00 đến 07:30:00
-                  AND TO_CHAR(START_TIME, 'HH24MI') NOT BETWEEN '0400' AND '0700'
+                  AND CONVERT(VARCHAR(5), START_TIME, 108) NOT BETWEEN '04:00' AND '07:00'
               )
             OR
             ---- 3) Hoặc overlap với bất kỳ Over time thực tế nào (ot)
@@ -1007,7 +943,6 @@ const FATPController = {
             SELECT 1
             FROM   over_time_data m
             WHERE  m.line = f.line
-              AND  m.factory = f.factory
               AND  m.type = 'Maintenance'
               AND  f.start_time < m.end_time
               AND  f.start_time  > m.start_time
@@ -1030,8 +965,6 @@ const FATPController = {
   getFATPMachineError5m: async (req, res) => {
     let connection;
     try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
       const now = new Date();
       const timeR = getCurrentShiftTimeRange(now);
       connection = await req.app.locals.oraclePool.getConnection();
@@ -1056,16 +989,15 @@ const FATPController = {
           SELECT * FROM FATP_ERROR_CONFIRM
       ) b
         ON a.ID = b.MACHINE_ID
-      WHERE ${factoryCondition1} AND
-      a.START_TIME BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
-        }', 'YYYY-MM-DD HH24:MI:SS')
-        AND TO_DATE('${req.body.dateTo || timeR.dateTo
-        }', 'YYYY-MM-DD HH24:MI:SS')
+      WHERE a.START_TIME BETWEEN CAST('${req.body.dateFrom || timeR.dateFrom
+        }' AS DATETIME)
+        AND CAST('${req.body.dateTo || timeR.dateTo
+        }' AS DATETIME)
         AND a.TIME > 300
         AND a.STATUS = 'ERROR'
         ${convertArrToStr(req.body.arr) === ""
           ? ""
-          : `AND a.LINE || '-M' || a.LOCATION IN (${convertArrToStr(
+          : `AND a.LINE + '-M' + CAST(a.LOCATION AS VARCHAR(MAX)) IN (${convertArrToStr(
             req.body.arr,
           )})`
         }`);
@@ -1092,7 +1024,7 @@ const FATPController = {
                 bang1.ERROR_TYPE, 
                 bang1.CAUSE, 
                 bang1.SOLUTION, 
-                NVL(bang2.Total, 0) AS Total
+                ISNULL(bang2.Total, 0) AS Total
           FROM (
               SELECT * 
               FROM ERROR_LOG 
@@ -1107,11 +1039,11 @@ const FATPController = {
               FROM FATP_ERROR_CONFIRM
               WHERE 
               ${req.body.error === ""
-          ? `CONFIRM_TIME BETWEEN TO_DATE('${req.body.dateFrom ||
+          ? `CONFIRM_TIME BETWEEN CAST('${req.body.dateFrom ||
           convertDate2(sevenDayAgo) + " 00:00:00"
-          }', 'YYYY-MM-DD HH24:MI:SS')
-                    AND TO_DATE('${req.body.dateTo || convertDate2(now) + " 23:59:59"
-          }', 'YYYY-MM-DD HH24:MI:SS')
+          }' AS DATETIME)
+                    AND CAST('${req.body.dateTo || convertDate2(now) + " 23:59:59"
+          }' AS DATETIME)
                     AND`
           : ""
         }
@@ -1138,8 +1070,6 @@ const FATPController = {
   getFATPErrorDetail: async (req, res) => {
     let connection;
     try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
       const now = new Date();
       const timeR = getCurrentShiftTimeRange(now);
       connection = await req.app.locals.oraclePool.getConnection();
@@ -1149,32 +1079,32 @@ const FATPController = {
           SELECT line,
                 start_time AS ot_start,
                 end_time AS ot_end
-          FROM over_time_data
-          WHERE ${factoryCondition1} AND TYPE = 'Over time'
-          and (TO_CHAR(START_TIME, 'YYYY-MM-DD') = TO_CHAR(TO_DATE('${req.body.dateFrom || timeR.dateFrom}', 'YYYY-MM-DD HH24:MI:SS'), 'YYYY-MM-DD')
-            or TO_CHAR(START_TIME, 'YYYY-MM-DD') = TO_CHAR(TO_DATE('${req.body.dateTo || timeR.dateTo}', 'YYYY-MM-DD HH24:MI:SS'), 'YYYY-MM-DD')
+          FROM   over_time_data
+          WHERE  TYPE = 'Over time'
+          and (CONVERT(VARCHAR(10), START_TIME, 120) = CONVERT(VARCHAR(10), CAST('${req.body.dateFrom || timeR.dateFrom}'' AS DATETIME), 120)
+            or CONVERT(VARCHAR(10), START_TIME, 120) = CONVERT(VARCHAR(10), CAST('${req.body.dateTo || timeR.dateTo}'' AS DATETIME), 120)
           )
         )
         select LINE,LOCATION,MACHINE_TYPE, MACHINE_NAME,STATUS,
-              TO_CHAR(START_TIME, 'YYYY-MM-DD HH24:MI:SS') AS START_TIME,
-              TO_CHAR(END_TIME, 'YYYY-MM-DD HH24:MI:SS') AS END_TIME,
+              FORMAT(START_TIME, 'yyyy-MM-dd HH:mm:ss') AS START_TIME,
+              FORMAT(END_TIME, 'yyyy-MM-dd HH:mm:ss') AS END_TIME,
               TIME,ERROR_CODE, ERROR_TYPE 
               FROM FATP_MACHINE_DATA f
-        WHERE ${factoryCondition1} AND START_TIME BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
-        }', 'YYYY-MM-DD HH24:MI:SS')
-              AND TO_DATE('${req.body.dateTo || timeR.dateTo
-        }', 'YYYY-MM-DD HH24:MI:SS') and STATUS like 'ERROR' 
+        where START_TIME BETWEEN CAST('${req.body.dateFrom || timeR.dateFrom
+        }' AS DATETIME)
+              AND CAST('${req.body.dateTo || timeR.dateTo
+        }' AS DATETIME) and STATUS like 'ERROR' 
               ${convertArrToStr(req.body.arr) === ""
           ? ""
-          : `and LINE || '-M' || LOCATION in (${convertArrToStr(req.body.arr)})`
+          : `and LINE + '-M' + CAST(LOCATION AS VARCHAR(MAX)) in (${convertArrToStr(req.body.arr)})`
         }
               AND (
                 (
                       -- Loại trừ 16:30:00 đến 19:30:00
-                      TO_CHAR(START_TIME, 'HH24MI') NOT BETWEEN '1630' AND '1930'
+                      CONVERT(VARCHAR(5), START_TIME, 108) NOT BETWEEN '16:30' AND '19:30'
                             
                       -- LOẠI TRỪ VÀ KHÔNG NẰM TRONG 04:30:00 đến 07:30:00
-                      AND TO_CHAR(START_TIME, 'HH24MI') NOT BETWEEN '0400' AND '0700'
+                      AND CONVERT(VARCHAR(5), START_TIME, 108) NOT BETWEEN '04:00' AND '07:00'
                   )
                 OR
                 ---- 3) Hoặc overlap với bất kỳ Over time thực tế nào (ot)
@@ -1190,7 +1120,6 @@ const FATPController = {
                 SELECT 1
                 FROM   over_time_data m
                 WHERE  m.line = f.line
-                  AND  m.factory = f.factory
                   AND  m.type = 'Maintenance'
                   AND  f.start_time < m.end_time
                   AND  f.start_time  > m.start_time
@@ -1210,14 +1139,12 @@ const FATPController = {
   getDataOverTimeFATP: async (req, res) => {
     let connection;
     try {
-      const { factory } = req.body;
-      const factoryCondition1 = `factory='${factory}'`;
       connection = await req.app.locals.oraclePool.getConnection();
       const resultOracle = await connection.execute(`
         select ID ,LINE ,SHIFT_NAME ,
-          TO_CHAR(START_TIME, 'YYYY-MM-DD HH24:MI:SS') AS START_TIME,
-          TO_CHAR(END_TIME, 'YYYY-MM-DD HH24:MI:SS') AS END_TIME,
-        TYPE ,ID_CONFIRM ,"Comment" from over_time_data where ${factoryCondition1} order by id desc
+          FORMAT(START_TIME, 'yyyy-MM-dd HH:mm:ss') AS START_TIME,
+          FORMAT(END_TIME, 'yyyy-MM-dd HH:mm:ss') AS END_TIME,
+        TYPE ,ID_CONFIRM ,"Comment" from over_time_data order by id desc
       `);
       return res.json(resultOracle.rows);
     } catch (err) {
@@ -1242,12 +1169,12 @@ const FATPController = {
         .replace("Z", "");
       const resultOracle = await connection.execute(`
         INSERT INTO over_time_data 
-        (LINE, START_TIME, END_TIME, TYPE, ID_CONFIRM,"Comment", FACTORY) VALUES 
+        (LINE, START_TIME, END_TIME, TYPE, ID_CONFIRM,"Comment") VALUES 
         (N'${req.body.line}',
-          TO_TIMESTAMP('${startTime}', 'YYYY-MM-DD HH24:MI:SS.FF3'), 
-          TO_TIMESTAMP('${endTime}', 'YYYY-MM-DD HH24:MI:SS.FF3'), 
+          CAST('${startTime}' AS DATETIME), 
+          CAST('${endTime}' AS DATETIME), 
           N'${req.body.type}',N'${req.body.idConfirm || ""}','${req.body.comment || ""
-        }','${req.body.factory}')
+        }')
       `);
       await connection.commit();
       return res.json({ success: true, message: `Đã thêm vào bảng` });
@@ -1272,13 +1199,12 @@ const FATPController = {
         .replace("Z", "");
       const resultOracle = await connection.execute(`
         UPDATE over_time_data 
-        SET START_TIME = TO_TIMESTAMP('${startTime}', 'YYYY-MM-DD HH24:MI:SS.FF3'),
-        END_TIME = TO_TIMESTAMP('${endTime}', 'YYYY-MM-DD HH24:MI:SS.FF3'), 
+        SET START_TIME = CAST('${startTime}' AS DATETIME),
+        END_TIME = CAST('${endTime}' AS DATETIME), 
         LINE = N'${req.body.line}',
         "Comment" = '${req.body.comment || ""}',
         TYPE = N'${req.body.type}',
-        ID_CONFIRM = N'${req.body.idConfirm || ""}',
-        FACTORY = N'${req.body.factory}'
+        ID_CONFIRM = N'${req.body.idConfirm || ""}'
         WHERE ID = '${req.body.id}'
       `);
       await connection.commit();
@@ -1313,3 +1239,14 @@ const FATPController = {
 };
 
 module.exports = FATPController;
+
+// CREATE TABLE [OVER_TIME_DATA] (
+//     [ID] BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+//     [LINE] NVARCHAR(50) NULL,
+//     [SHIFT_NAME] NVARCHAR(50) NULL,
+//     [START_TIME] DATETIME2 NULL,
+//     [END_TIME] DATETIME2 NULL,
+//     [TYPE] NVARCHAR(50) NULL,
+//     [ID_CONFIRM] NVARCHAR(20) NULL,
+//     [Comment] NVARCHAR(500) NULL
+// );
