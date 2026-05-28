@@ -730,7 +730,7 @@ const FATPController = {
                     ORDER BY x.start_time DESC, x.id DESC
                 ) AS rn
             FROM fatp_machine_data x
-            WHERE x.factory is null
+            WHERE x.factory = 'A02'
         ) f
         WHERE f.rn = 1
           AND f.status = 'ERROR'

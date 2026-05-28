@@ -11,6 +11,14 @@ const TIMEZONE = process.env.TZ || "Asia/Ho_Chi_Minh";
 const CRON_EXPR = process.env.MAINTENANCE_CRON || "0 8 * * *"; // 08:00 hàng ngày
 const NOTIFY_KIND_D3 = "D-3";
 
+const LIST_STATUS_MAINTENANCE = [
+  'Waiting for ME signature',
+  'Waiting for TE signature',
+  'Waiting for PM signature',
+  'Waiting for PQE signature',
+  'OK',
+]
+
 const MAIL_RATE = {
   rateDelta: 60000, // trong 60 giây
   rateLimit: 25, // tối đa 25 mail/60s (chỉnh tùy server bạn)
@@ -232,9 +240,8 @@ async function processMaintenanceD3(pool, logger = console) {
 
     const when = new Date(row.MAINTENANCE_DATE);
     const whenStr = formatLocalHCM(when);
-    const subject = `[Maintenance Reminder D-3] ${row.FACTORY || ""} - ${
-      row.LINE || ""
-    } - ${row.MACHINE_NAME || ""} @ ${whenStr}`;
+    const subject = `[Maintenance Reminder D-3] ${row.FACTORY || ""} - ${row.LINE || ""
+      } - ${row.MACHINE_NAME || ""} @ ${whenStr}`;
     const html = buildEmailHtml(row, whenStr);
 
     const startISO = when.toISOString();
@@ -242,9 +249,8 @@ async function processMaintenanceD3(pool, logger = console) {
 
     const ics = buildIcsEvent({
       uid: `maintenance-${row.ID}-${NOTIFY_KIND_D3}@yourcompany`,
-      summary: `Maintenance: ${row.FACTORY || ""}/${row.LINE || ""}/${
-        row.MACHINE_NAME || ""
-      }`,
+      summary: `Maintenance: ${row.FACTORY || ""}/${row.LINE || ""}/${row.MACHINE_NAME || ""
+        }`,
       description: `Bảo dưỡng theo kế hoạch. ${row.NOTE || ""}`,
       startISO,
       endISO,
@@ -276,7 +282,7 @@ async function processMaintenanceD3(pool, logger = console) {
           subject,
           status: "FAILED",
         });
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 }
@@ -468,7 +474,7 @@ function getAllDayOfYear(date) {
   };
 }
 
-function getMaintenancePlanOngoing() {}
+function getMaintenancePlanOngoing() { }
 
 const MaintananceController = {
   sendEmailWithOptionalIcs,
@@ -502,15 +508,14 @@ const MaintananceController = {
       const icsContent =
         includeIcs && startISO && endISO
           ? buildIcsEvent({
-              uid: `maintenance-${
-                maintenanceId || Date.now()
+            uid: `maintenance-${maintenanceId || Date.now()
               }-${kind}@yourcompany`,
-              summary,
-              description: (text || "").toString(),
-              startISO,
-              endISO,
-              location,
-            })
+            summary,
+            description: (text || "").toString(),
+            startISO,
+            endISO,
+            location,
+          })
           : null;
 
       const sent = await sendEmailWithOptionalIcs({
@@ -856,6 +861,130 @@ const MaintananceController = {
     } catch (err) {
       console.error("Error fetching getMaintenancePlanApi: ", err);
       return null;
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+  getFATPMaintenance: async (req, res) => {
+    const pool = global.oraclePool;
+    let connection;
+    try {
+      connection = await req.app.locals.oraclePool.getConnection();
+      const sql = `select m.ID,m.FACTORY,m.LINE,m.LOCATION,m.CATEGORY,m.MACHINE_TYPE,
+        m.MACHINE_NAME,c.STATUS,c.NOTE,c.DOCUMENT,c.DATE_CHECK,c.UPDATED_AT 
+        from machine_list m
+        LEFT JOIN fatp_maintenance_result_data c
+            ON c.line = m.line 
+            and m.factory = c.factory
+            and TO_DATE(c.date_check, 'YYYY-MM-DD') >= TRUNC(SYSDATE, 'MM')
+            and TO_DATE(c.date_check, 'YYYY-MM-DD') < ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
+            where m.factory = :factory`;
+      const resultOracle = await connection.execute(sql, {
+        factory: req.body.factory || "A02",
+      });
+      return res.json(resultOracle.rows);
+    } catch (err) {
+      console.error("Error fetching getFATPMaintenance: ", err);
+      return null;
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+  getFATPMaintenanceMultiMonth: async (req, res) => {
+    const pool = global.oraclePool;
+    let connection;
+    try {
+      const now = new Date();
+      const timeR = getAllDayOfYear(now);
+      connection = await req.app.locals.oraclePool.getConnection();
+      const sql = `select m.ID,m.FACTORY,m.LINE,m.LOCATION,m.CATEGORY,m.MACHINE_TYPE,
+        m.MACHINE_NAME,c.STATUS,c.NOTE,c.DOCUMENT,c.DATE_CHECK,c.UPDATED_AT 
+        from machine_list m
+        LEFT JOIN fatp_maintenance_result_data c
+            ON c.line = m.line 
+            and m.factory = c.factory
+            and TO_DATE(c.date_check,'YYYY-MM-DD') 
+              BETWEEN TO_DATE(:dateFrom,'YYYY-MM-DD') and TO_DATE(:dateTo,'YYYY-MM-DD')
+            where m.factory = :factory`;
+      const resultOracle = await connection.execute(sql, {
+        factory: req.body.factory || "A02",
+        dateFrom: req.body.dateFrom || timeR.dateFrom,
+        dateTo: req.body.dateTo || timeR.dateTo,
+      });
+      return res.json(resultOracle.rows);
+    } catch (err) {
+      console.error("Error fetching getFATPMaintenanceMultiMonth: ", err);
+      return null;
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+  addFATPMaintenancePlan: async (req, res) => {
+    let connection;
+    try {
+      const { line, note, factory } = req.body;
+      const files = req.files || [];
+      const document = files.map(file => `uploads/imageMaintenance/${file.filename}`).join(',');
+
+      connection = await req.app.locals.oraclePool.getConnection();
+      const sql = `INSERT INTO fatp_maintenance_result_data 
+      (LINE, FACTORY, NOTE, STATUS, DOCUMENT)
+        VALUES (:line, :factory, :note, :status, :document )`;
+      const resultOracle = await connection.execute(sql, {
+        line: line,
+        factory: factory,
+        note: note,
+        status: 'Waiting for ME signature',
+        document: document,
+      }, {
+        autoCommit: true,
+      });
+
+      return res.json({
+        line,
+        status: 'Waiting for ME signature',
+        factory,
+        note,
+        document,
+      });
+    } catch (err) {
+      console.error("Error executing addFATPMaintenancePlan: ", err);
+      return res.status(500).json({ error: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+  updateFATPMaintenancePlan: async (req, res) => {
+    let connection;
+    try {
+      const { id, status } = req.body;
+
+      connection = await req.app.locals.oraclePool.getConnection();
+      const sql = `UPDATE fatp_maintenance_result_data 
+      SET STATUS = :status
+      WHERE ID = :id`;
+      const resultOracle = await connection.execute(sql, {
+        status: status,
+        id: id,
+      }, {
+        autoCommit: true,
+      });
+
+      return res.json({
+        id,
+        status,
+      });
+    } catch (err) {
+      console.error("Error executing updateFATPMaintenancePlan: ", err);
+      return res.status(500).json({ error: err.message });
     } finally {
       if (connection) {
         await connection.close();
