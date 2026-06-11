@@ -30,5 +30,6 @@ router.post("/getMaintenancePlanApi", MaintananceController.getMaintenancePlanAp
 router.post("/getFATPMaintenanceMultiMonth", MaintananceController.getFATPMaintenanceMultiMonth);
 router.post("/updateFATPMaintenancePlan", MaintananceController.updateFATPMaintenancePlan);
 router.post("/addFATPMaintenancePlan", upload.array("files"), MaintananceController.addFATPMaintenancePlan);
+router.get("/approvalFATPMaintenance", MaintananceController.approvalFATPMaintenancePlan);
 
 module.exports = router;

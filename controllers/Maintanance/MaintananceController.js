@@ -11,13 +11,25 @@ const TIMEZONE = process.env.TZ || "Asia/Ho_Chi_Minh";
 const CRON_EXPR = process.env.MAINTENANCE_CRON || "0 8 * * *"; // 08:00 hàng ngày
 const NOTIFY_KIND_D3 = "D-3";
 
-const LIST_STATUS_MAINTENANCE = [
-  'Waiting for ME signature',
-  'Waiting for TE signature',
-  'Waiting for PM signature',
-  'Waiting for PQE signature',
-  'OK',
-]
+const LIST_BP_SIGNATURE = {
+  'PTH': 'cpe-vn-me-automation@mail.foxconn.com',
+  'PM': 'cpe-vn-me-automation@mail.foxconn.com',
+  'TE': 'cpe-vn-me-automation@mail.foxconn.com',
+  'ME': 'cpe-vn-me-automation@mail.foxconn.com',
+  'PQE': 'cpe-vn-me-automation@mail.foxconn.com',
+  'PE': 'cpe-vn-me-automation@mail.foxconn.com',
+  'PD': 'cpe-vn-me-automation@mail.foxconn.com',
+  'QA': '',
+  'QC': 'cpe-vn-me-automation@mail.foxconn.com',
+  'R&D': 'cpe-vn-me-automation@mail.foxconn.com',
+  'SQE': 'cpe-vn-me-automation@mail.foxconn.com',
+  'PP': '',
+  'MFG': '',
+  'IE': '',
+  'MET': '',
+  'FQC': '',
+  'PROD': '',
+};
 
 const MAIL_RATE = {
   rateDelta: 60000, // trong 60 giây
@@ -221,6 +233,149 @@ async function insertNotifyLog(
   } finally {
     await conn.close();
   }
+}
+
+function renderResponsePage(title, message, isSuccess = true) {
+  const bgColor = isSuccess ? "#e8f5e9" : "#ffebee";
+  const iconColor = isSuccess ? "#2e7d32" : "#c62828";
+  const icon = isSuccess ? "✓" : "✗";
+
+  return `
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${title}</title>
+      <style>
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          background-color: #f4f6f9;
+          margin: 0;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          height: 100vh;
+        }
+        .card {
+          background-color: #ffffff;
+          padding: 40px;
+          border-radius: 16px;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+          text-align: center;
+          max-width: 450px;
+          width: 90%;
+        }
+        .icon-circle {
+          width: 72px;
+          height: 72px;
+          background-color: ${bgColor};
+          color: ${iconColor};
+          border-radius: 50%;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          font-size: 36px;
+          font-weight: bold;
+          margin: 0 auto 24px;
+        }
+        h1 {
+          color: #333333;
+          margin: 0 0 16px;
+          font-size: 24px;
+        }
+        p {
+          color: #666666;
+          line-height: 1.6;
+          margin: 0 0 30px;
+          font-size: 16px;
+        }
+        .btn {
+          display: inline-block;
+          background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
+          color: #ffffff;
+          padding: 12px 30px;
+          text-decoration: none;
+          border-radius: 8px;
+          font-weight: 600;
+          box-shadow: 0 4px 10px rgba(25, 118, 210, 0.2);
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 6px 15px rgba(25, 118, 210, 0.3);
+        }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="icon-circle">${icon}</div>
+        <h1>${title}</h1>
+        <p>${message}</p>
+        <a href="javascript:window.close()" class="btn">Đóng Cửa Sổ</a>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+async function sendApprovalRequestEmail({ req, id, bp, line, factory, note, document }) {
+  const email = LIST_BP_SIGNATURE[bp];
+  if (!email) return;
+
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const acceptLink = `${baseUrl}/api/maintenance/approvalFATPMaintenance?id=${id}&bp=${bp}&action=accept`;
+  const denyLink = `${baseUrl}/api/maintenance/approvalFATPMaintenance?id=${id}&bp=${bp}&action=deny`;
+
+  const subject = `[FATP Maintenance Approval] Yêu cầu ký duyệt bảo trì Line ${line} - Bộ phận ${bp}`;
+  const html = `
+    <div style="font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
+      <div style="background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%); color: #ffffff; padding: 24px; text-align: center;">
+        <h2 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px;">Yêu Cầu Ký Duyệt Bảo Trì</h2>
+        <p style="margin: 8px 0 0; opacity: 0.9; font-size: 14px;">Bộ phận cần phê duyệt: <strong style="color: #ffe082;">${bp}</strong></p>
+      </div>
+      <div style="padding: 24px; background-color: #fafafa; color: #333333; line-height: 1.6;">
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+          <tr>
+            <td style="padding: 8px 0; color: #666666; font-size: 14px; width: 30%;"><strong>Mã ID:</strong></td>
+            <td style="padding: 8px 0; font-size: 14px; font-weight: 600;">#${id}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #666666; font-size: 14px;"><strong>Factory:</strong></td>
+            <td style="padding: 8px 0; font-size: 14px; font-weight: 600;">${factory || "N/A"}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #666666; font-size: 14px;"><strong>Line:</strong></td>
+            <td style="padding: 8px 0; font-size: 14px; font-weight: 600; color: #1976d2;">${line || "N/A"}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #666666; font-size: 14px; vertical-align: top;"><strong>Ghi chú:</strong></td>
+            <td style="padding: 8px 0; font-size: 14px; white-space: pre-wrap;">${note || "Không có ghi chú."}</td>
+          </tr>
+          ${document ? `
+          <tr>
+            <td style="padding: 8px 0; color: #666666; font-size: 14px; vertical-align: top;"><strong>Tài liệu đính kèm:</strong></td>
+            <td style="padding: 8px 0; font-size: 14px;">${document.split(',').map(d => `<a href="${baseUrl}/${d}" target="_blank" style="color: #1976d2; text-decoration: none; word-break: break-all;">[Xem tài liệu/ảnh]</a>`).join('<br/>')}</td>
+          </tr>` : ''}
+        </table>
+        <p style="font-size: 14px; margin-bottom: 24px; color: #555555; text-align: center; font-style: italic;">Vui lòng kiểm tra thông tin và chọn một trong hai hành động dưới đây:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${acceptLink}" style="display: inline-block; padding: 12px 30px; font-size: 14px; font-weight: bold; color: #ffffff; background-color: #2e7d32; text-decoration: none; border-radius: 8px; box-shadow: 0 4px 6px rgba(46,125,50,0.2); margin-right: 15px; text-decoration: none;">Đồng Ý (Accept)</a>
+          <a href="${denyLink}" style="display: inline-block; padding: 12px 30px; font-size: 14px; font-weight: bold; color: #ffffff; background-color: #c62828; text-decoration: none; border-radius: 8px; box-shadow: 0 4px 6px rgba(198,40,40,0.2); text-decoration: none;">Từ Chối (Deny)</a>
+        </div>
+      </div>
+      <div style="background-color: #f1f1f1; padding: 16px; text-align: center; font-size: 12px; color: #888888; border-top: 1px solid #e0e0e0;">
+        <p style="margin: 0;">Email tự động gửi từ Hệ thống Quản lý Bảo dưỡng.</p>
+        <p style="margin: 4px 0 0;">Vui lòng không trả lời trực tiếp email này.</p>
+      </div>
+    </div>
+  `;
+
+  await sendEmailWithOptionalIcs({
+    toList: [email],
+    subject,
+    html
+  });
 }
 
 // ---------- Core job ----------
@@ -878,8 +1033,8 @@ const MaintananceController = {
         LEFT JOIN fatp_maintenance_result_data c
             ON c.line = m.line 
             and m.factory = c.factory
-            and TO_DATE(c.date_check, 'YYYY-MM-DD') >= TRUNC(SYSDATE, 'MM')
-            and TO_DATE(c.date_check, 'YYYY-MM-DD') < ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
+            and c.date_check >= TRUNC(SYSDATE, 'MM')
+            and c.date_check < ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
             where m.factory = :factory`;
       const resultOracle = await connection.execute(sql, {
         factory: req.body.factory || "A02",
@@ -907,7 +1062,7 @@ const MaintananceController = {
         LEFT JOIN fatp_maintenance_result_data c
             ON c.line = m.line 
             and m.factory = c.factory
-            and TO_DATE(c.date_check,'YYYY-MM-DD') 
+            and TRUNC(c.date_check) 
               BETWEEN TO_DATE(:dateFrom,'YYYY-MM-DD') and TO_DATE(:dateTo,'YYYY-MM-DD')
             where m.factory = :factory`;
       const resultOracle = await connection.execute(sql, {
@@ -928,27 +1083,62 @@ const MaintananceController = {
   addFATPMaintenancePlan: async (req, res) => {
     let connection;
     try {
-      const { line, note, factory } = req.body;
+      const { line, note, factory, idConfirm } = req.body;
       const files = req.files || [];
       const document = files.map(file => `uploads/imageMaintenance/${file.filename}`).join(',');
+      const stages = Object.keys(LIST_BP_SIGNATURE)
+        .filter(key => {
+          const val = LIST_BP_SIGNATURE[key];
+          return val !== "" && val !== null;
+        })
+        .map(key => ({
+          key: key,
+          label: key
+        }));
+
+      const initialStatus = stages[0]?.key || 'ME';
 
       connection = await req.app.locals.oraclePool.getConnection();
       const sql = `INSERT INTO fatp_maintenance_result_data 
-      (LINE, FACTORY, NOTE, STATUS, DOCUMENT)
-        VALUES (:line, :factory, :note, :status, :document )`;
+      (LINE, FACTORY, NOTE, STATUS, DOCUMENT, IDCONFIRM)
+        VALUES (:line, :factory, :note, :status, :document, :idConfirm)
+        RETURNING ID INTO :out_id`;
+
       const resultOracle = await connection.execute(sql, {
         line: line,
         factory: factory,
         note: note,
-        status: 'Waiting for ME signature',
+        status: initialStatus,
         document: document,
+        idConfirm: idConfirm,
+        out_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }
       }, {
         autoCommit: true,
       });
 
+      const newId = resultOracle.outBinds?.out_id?.[0] ?? null;
+
+      // Send initial approval email to the first stage
+      if (newId && initialStatus) {
+        try {
+          await sendApprovalRequestEmail({
+            req,
+            id: newId,
+            bp: initialStatus,
+            line,
+            factory,
+            note,
+            document
+          });
+        } catch (mailErr) {
+          console.error("Failed to send initial approval email:", mailErr);
+        }
+      }
+
       return res.json({
+        id: newId,
         line,
-        status: 'Waiting for ME signature',
+        status: initialStatus,
         factory,
         note,
         document,
@@ -985,6 +1175,112 @@ const MaintananceController = {
     } catch (err) {
       console.error("Error executing updateFATPMaintenancePlan: ", err);
       return res.status(500).json({ error: err.message });
+    } finally {
+      if (connection) {
+        await connection.close();
+      }
+    }
+  },
+  approvalFATPMaintenancePlan: async (req, res) => {
+    let connection;
+    try {
+      const { id, bp, action } = req.query;
+
+      if (!id || !bp || !action) {
+        return res.status(400).send(renderResponsePage("Lỗi Yêu Cầu", "Thiếu tham số (id, bp, action).", false));
+      }
+
+      const cleanAction = action.trim().toLowerCase();
+      if (cleanAction !== "accept" && cleanAction !== "deny") {
+        return res.status(400).send(renderResponsePage("Lỗi Yêu Cầu", "Hành động (action) không hợp lệ.", false));
+      }
+
+      // Check if bp is a key in LIST_BP_SIGNATURE
+      if (!LIST_BP_SIGNATURE.hasOwnProperty(bp)) {
+        return res.status(400).send(renderResponsePage("Lỗi Yêu Cầu", `Bộ phận '${bp}' không hợp lệ.`, false));
+      }
+
+      const validBps = Object.keys(LIST_BP_SIGNATURE).filter(
+        key => LIST_BP_SIGNATURE[key] !== "" && LIST_BP_SIGNATURE[key] !== null
+      );
+
+      connection = await req.app.locals.oraclePool.getConnection();
+
+      // Fetch the plan details to verify it exists and get properties
+      const fetchSql = `SELECT LINE, FACTORY, NOTE, DOCUMENT, STATUS FROM fatp_maintenance_result_data WHERE ID = :id`;
+      const fetchResult = await connection.execute(fetchSql, { id });
+
+      if (!fetchResult.rows || fetchResult.rows.length === 0) {
+        return res.status(404).send(renderResponsePage("Không Tìm Thấy", "Không tìm thấy kế hoạch bảo trì tương ứng.", false));
+      }
+
+      const row = fetchResult.rows[0];
+      const { LINE, FACTORY, NOTE, DOCUMENT, STATUS } = row;
+
+      // Check if it's already approved or denied
+      if (STATUS === 'OK' || STATUS === 'Approved') {
+        return res.send(renderResponsePage("Đã Phê Duyệt", `Kế hoạch bảo trì Line ${LINE} đã được hoàn thành duyệt toàn bộ trước đó.`, true));
+      }
+
+      if (STATUS && STATUS.toLowerCase().startsWith('deny')) {
+        return res.send(renderResponsePage("Đã Từ Chối", `Kế hoạch bảo trì Line ${LINE} đã bị từ chối trước đó (${STATUS}).`, false));
+      }
+
+      const bpIndex = validBps.indexOf(bp);
+
+      if (cleanAction === "accept") {
+        // Enforce sequence: cannot sign off if the database status is already ahead of or behind this bp.
+        if (STATUS !== bp) {
+          const dbIndex = validBps.indexOf(STATUS);
+          if (dbIndex > bpIndex) {
+            return res.send(renderResponsePage("Đã Ký Duyệt", `Bộ phận ${bp} đã ký duyệt bước này trước đó. Trạng thái hiện tại: ${STATUS}.`, true));
+          }
+          return res.status(400).send(renderResponsePage("Không Đúng Lượt", `Chưa đến lượt ký duyệt của bộ phận ${bp}. Trạng thái hiện tại: ${STATUS}.`, false));
+        }
+
+        // Check if bp is the last key
+        if (bpIndex === validBps.length - 1) {
+          // Last stage: update status to OK
+          const updateSql = `UPDATE fatp_maintenance_result_data SET STATUS = 'OK' WHERE ID = :id`;
+          await connection.execute(updateSql, { id }, { autoCommit: true });
+
+          return res.send(renderResponsePage("Hoàn Tất Phê Duyệt", `Kế hoạch bảo trì Line ${LINE} đã được duyệt hoàn tất thành công bởi tất cả bộ phận.`));
+        } else {
+          // Not the last stage: move to next bp
+          const nextBp = validBps[bpIndex + 1];
+          const nextEmail = LIST_BP_SIGNATURE[nextBp];
+
+          const updateSql = `UPDATE fatp_maintenance_result_data SET STATUS = :nextBp WHERE ID = :id`;
+          await connection.execute(updateSql, { nextBp, id }, { autoCommit: true });
+
+          // Send email to next bp
+          try {
+            await sendApprovalRequestEmail({
+              req,
+              id,
+              bp: nextBp,
+              line: LINE,
+              factory: FACTORY,
+              note: NOTE,
+              document: DOCUMENT
+            });
+          } catch (mailErr) {
+            console.error(`Failed to send approval email to next department (${nextBp}):`, mailErr);
+          }
+
+          return res.send(renderResponsePage("Đã Phê Duyệt", `Bạn đã duyệt thành công bước này (${bp}). Đã chuyển yêu cầu và gửi email phê duyệt đến bộ phận tiếp theo: ${nextBp} (${nextEmail}).`));
+        }
+      } else if (cleanAction === "deny") {
+        // Deny: update status to 'Deny by BP'
+        const denyStatus = `Deny by ${bp}`;
+        const updateSql = `UPDATE fatp_maintenance_result_data SET STATUS = :status WHERE ID = :id`;
+        await connection.execute(updateSql, { status: denyStatus, id }, { autoCommit: true });
+
+        return res.send(renderResponsePage("Đã Từ Chối", `Bạn đã từ chối phê duyệt kế hoạch bảo trì Line ${LINE}. Trạng thái đã được cập nhật thành "${denyStatus}".`, false));
+      }
+    } catch (err) {
+      console.error("Error executing approvalFATPMaintenancePlan: ", err);
+      return res.status(500).send(renderResponsePage("Lỗi Hệ Thống", `Đã xảy ra lỗi trong quá trình xử lý: ${err.message}`, false));
     } finally {
       if (connection) {
         await connection.close();
