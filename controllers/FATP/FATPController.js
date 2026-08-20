@@ -192,6 +192,7 @@ const FATPController = {
       const { factory } = req.body;
       const factoryCondition1 = `factory='${factory}'`;
       const factoryCondition2 = `f.factory='${factory}'`;
+      const factoryCondition3 = `f2.factory='${factory}'`;
 
       //connect oracle
       connection = await req.app.locals.oraclePool.getConnection();
@@ -258,7 +259,7 @@ const FATPController = {
           WHERE ${factoryCondition2} and f.start_time = (
             SELECT MAX(f2.start_time)
             FROM FATP_MACHINE_DATA f2
-            WHERE f2.line = f.line
+            WHERE ${factoryCondition3} and f2.line = f.line
               AND f2.location = f.location
           )
         ) src

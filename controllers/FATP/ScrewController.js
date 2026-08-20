@@ -75,12 +75,10 @@ const ScrewController = {
           SUM(CASE WHEN lower(state) = 'pass' THEN 1 ELSE 0 END) AS pass_count,
           SUM(CASE WHEN lower(state) = 'fail' THEN 1 ELSE 0 END) AS fail_count
         FROM ${tableName}
-        ---WHERE TIME_UPDATE BETWEEN TO_DATE('${
-          req.body.dateFrom || timeR.dateFrom
+        ---WHERE TIME_UPDATE BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
         }', 'YYYY-MM-DD HH24:MI:SS')
-          ---AND TO_DATE('${
-            req.body.dateTo || timeR.dateTo
-          }', 'YYYY-MM-DD HH24:MI:SS')
+          ---AND TO_DATE('${req.body.dateTo || timeR.dateTo
+        }', 'YYYY-MM-DD HH24:MI:SS')
         GROUP BY line, name_machine,location
         ORDER BY line,name_machine
         `);
@@ -111,12 +109,10 @@ const ScrewController = {
         SELECT ID ,FACTORY ,LINE ,LOCATION ,NAME_MACHINE ,MODEL_NAME ,SERIAL_NUMBER ,FORCE_1 ,FORCE_2 ,FORCE_3 ,FORCE_4 ,STATE ,
           TO_CHAR(time_update, 'YYYY-MM-DD HH24:MI:SS') AS time_update
         FROM ${tableName} where state = 'FAIL'
-        ---AND TIME_UPDATE BETWEEN TO_DATE('${
-          req.body.dateFrom || timeR.dateFrom
+        ---AND TIME_UPDATE BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
         }', 'YYYY-MM-DD HH24:MI:SS')
-          ---AND TO_DATE('${
-            req.body.dateTo || timeR.dateTo
-          }', 'YYYY-MM-DD HH24:MI:SS')
+          ---AND TO_DATE('${req.body.dateTo || timeR.dateTo
+        }', 'YYYY-MM-DD HH24:MI:SS')
         order by time_update desc
         `);
       return res.json(resultOracle.rows);
@@ -152,12 +148,10 @@ const ScrewController = {
         FROM ${tableName} where line = '${req.body.line}' 
         and name_machine = '${req.body.name}'
         ---and LOCATION = '${req.body.location}'
-        ---AND TIME_UPDATE BETWEEN TO_DATE('${
-          req.body.dateFrom || timeR.dateFrom
+        ---AND TIME_UPDATE BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
         }', 'YYYY-MM-DD HH24:MI:SS')
-          ---AND TO_DATE('${
-            req.body.dateTo || timeR.dateTo
-          }', 'YYYY-MM-DD HH24:MI:SS')
+          ---AND TO_DATE('${req.body.dateTo || timeR.dateTo
+        }', 'YYYY-MM-DD HH24:MI:SS')
         order by time_update desc
         `);
       return res.json(resultOracle.rows);
@@ -197,12 +191,10 @@ const ScrewController = {
                TO_CHAR(time_update + INTERVAL '30' MINUTE, 'YYYY-MM-DD') AS DateT,
                TO_CHAR(time_update + INTERVAL '30' MINUTE, 'HH24') || ':30' AS TimeT
         FROM ${tableName}
-        ---WHERE TIME_UPDATE BETWEEN TO_DATE('${
-          req.body.dateFrom || timeR.dateFrom
+        ---WHERE TIME_UPDATE BETWEEN TO_DATE('${req.body.dateFrom || timeR.dateFrom
         }', 'YYYY-MM-DD HH24:MI:SS')
-          ---AND TO_DATE('${
-            req.body.dateTo || timeR.dateTo
-          }', 'YYYY-MM-DD HH24:MI:SS')
+          ---AND TO_DATE('${req.body.dateTo || timeR.dateTo
+        }', 'YYYY-MM-DD HH24:MI:SS')
       ) bang1
       GROUP BY LINE, name_machine,DateT, TimeT
       ORDER BY DateT, TimeT
@@ -365,15 +357,15 @@ const ScrewController = {
         // rollback file nếu DB fail
         try {
           fs.unlinkSync(savedPathFs);
-        } catch {}
+        } catch { }
         console.error("[DB] Insert error:", dbErr);
         return res
           .status(500)
           .json({ message: "DB insert failed", detail: dbErr.message });
       } finally {
         try {
-          await conn.close();
-        } catch {}
+          await connection.close();
+        } catch { }
       }
     } catch (err) {
       console.error("[API] Upload error:", err);

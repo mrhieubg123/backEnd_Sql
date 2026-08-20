@@ -348,15 +348,15 @@ const ProjectManagementController = {
         // rollback file nếu DB fail
         try {
           fs.unlinkSync(savedPathFs);
-        } catch {}
+        } catch { }
         console.error("[DB] Insert error:", dbErr);
         return res
           .status(500)
           .json({ message: "DB insert failed", detail: dbErr.message });
       } finally {
         try {
-          await conn.close();
-        } catch {}
+          await connection.close();
+        } catch { }
       }
     } catch (err) {
       console.error("[API] Upload error:", err);

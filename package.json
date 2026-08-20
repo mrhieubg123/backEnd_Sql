@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "sever.js",
   "scripts": {
-    "start": "nodemon sever.js"
+    "start": "SET UV_THREADPOOL_SIZE=64 && nodemon sever.js"
   },
   "keywords": [],
   "author": "",

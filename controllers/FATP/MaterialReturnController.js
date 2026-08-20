@@ -408,21 +408,21 @@ const MaterialReturnController = {
         try {
             const sql = require('mssql');
             const pool = req.app.locals.db; // Lấy kết nối từ app.locals
-            const endTime = new Date(req.body.end_time); 
-        
+            const endTime = new Date(req.body.end_time);
+
             // Trong request body của bạn KHÔNG có date_time, 
             // nên ta sẽ sử dụng ngày giờ hiện tại của server (hoặc một giá trị mặc định nào đó)
             const dateTime = req.body.date_time ? new Date(req.body.date_time) : new Date();
-    
+
             // Kiểm tra xem việc chuyển đổi có hợp lệ không
             if (isNaN(endTime.getTime()) || isNaN(dateTime.getTime())) {
-                 return res.status(400).json({ msg: "Định dạng ngày giờ (end_time hoặc date_time) không hợp lệ." });
+                return res.status(400).json({ msg: "Định dạng ngày giờ (end_time hoặc date_time) không hợp lệ." });
             }
-    
-    
+
+
             // 2. Sử dụng request().input() để tham số hóa truy vấn
             const request = pool.request();
-            
+
             request.input('DATE_TIME', sql.DateTime, dateTime);
             request.input('END_TIME', sql.DateTime, endTime); // <-- Khắc phục lỗi tại đây
             request.input('WO', sql.NVarChar, req.body.wo);
@@ -438,8 +438,8 @@ const MaterialReturnController = {
             request.input('EMP_NO', sql.NVarChar, req.body.emp_no);
             request.input('EMP_CONFIRM', sql.NVarChar, req.body.emp_confirm);
             request.input('SLOT_NO', sql.NVarChar, req.body.slot_no);
-            
-    
+
+
             // 3. Thực hiện truy vấn (Sử dụng tên tham số (@...) thay vì chuỗi)
             const query = `
                 INSERT INTO [SV205].[BN3_205].[dbo].[BN3_MATERIAL_RETURN_DETAIL]
@@ -455,7 +455,7 @@ const MaterialReturnController = {
                     @EMP_NO, @EMP_CONFIRM, @SLOT_NO, @COMMENT
                 );
             `;
-    
+
             const result = await request.query(query);
             return res.status(200).json({ msg: "Them material return status" });
         }

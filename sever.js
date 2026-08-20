@@ -60,6 +60,11 @@ app.use((req, res, next) => {
   next();
 });
 
+//api test
+app.get("/api/test", (req, res) => {
+  res.status(200).send("OK");
+});
+
 // Proxy API
 app.post("/api/proxy-api", async (req, res) => {
   const { url, method = "GET", data = null, headers = {} } = req.body;
@@ -152,9 +157,10 @@ async function init() {
       connectString: process.env.CONNECT_STRING,
       poolMin: 2,
       poolMax: 50,
-      poolTimeout: 6000,
-      queueTimeout: 60000,
-      poolIncrement: 1,
+      poolTimeout: 600,
+      queueTimeout: 15000,
+      poolIncrement: 2,
+      queueMax: 100,
     });
     app.locals.oraclePool = pool;
     global.oraclePool = pool;

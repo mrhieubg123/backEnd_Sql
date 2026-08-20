@@ -638,9 +638,7 @@ const MaintananceController = {
   getCurrentShiftTimeRange,
   fetchMaintenancesD3,
   registerMaintenanceRoutes: async (req, res) => {
-    let connection;
     try {
-      connection = await req.app.locals.oraclePool.getConnection();
       const {
         to,
         subject,
