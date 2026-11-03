@@ -701,19 +701,35 @@ const MaintananceController = {
       connection = await pool.getConnection();
       const sql = `
       WITH filtered AS (
-        SELECT *
-        FROM fatp_machine_data f
-        WHERE status = 'ERROR'
+        SELECT
+          f.line,
+          f.location,
+          f.machine_name,
+          e.error_name AS error_type,
+          h.start_time,
+          h.end_time,
+          (
+            CAST(NVL(h.end_time, CAST(SYSDATE AS TIMESTAMP)) AS DATE)
+            - CAST(h.start_time AS DATE)
+          ) * 24 * 60 * 60 AS time
+        FROM machine_status_history h
+        INNER JOIN fatp_machine_info f
+          ON f.machine_id = h.machine_id
+        LEFT JOIN error_catalog e
+          ON e.error_id = h.error_id
+        WHERE h.status = 3
+          AND ( :factory IS NULL OR f.factory = :factory )
           AND ( :line IS NULL OR f.line = :line )
-          AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
-                              AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+          AND h.start_time BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+                                AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
           AND NOT EXISTS (
                   SELECT 1
                   FROM   over_time_data m
                   WHERE  m.line = f.line
+                    AND  m.factory = f.factory
                     AND  m.type = 'Maintenance'
-                    AND  f.start_time < m.end_time
-                    AND  f.start_time  > m.start_time
+                    AND  h.start_time < m.end_time
+                    AND  h.start_time > m.start_time
                 )
       ),
       machine_agg AS (
@@ -785,50 +801,64 @@ const MaintananceController = {
       const resultOracle = await connection.execute(sql, {
         dateFrom: date.dateFrom || timeR.dateFrom,
         dateTo: date.dateTo || timeR.dateTo,
+        factory: date.factory || null,
         line: date.line?.[0]?.LINE || null,
       });
       const sql1 = `
         SELECT
-          ROUND(SUM(CASE WHEN STATUS = 'RUN'
-                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+          ROUND(SUM(CASE WHEN h.STATUS = 1
+                        THEN (CAST(NVL(h.END_TIME, CAST(SYSDATE AS TIMESTAMP)) AS DATE) - CAST(h.START_TIME AS DATE)) * 24
                         ELSE 0 END), 2) AS Availability,
-          ROUND(SUM(CASE WHEN STATUS = 'ERROR'
-                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+          ROUND(SUM(CASE WHEN h.STATUS = 3
+                        THEN (CAST(NVL(h.END_TIME, CAST(SYSDATE AS TIMESTAMP)) AS DATE) - CAST(h.START_TIME AS DATE)) * 24
                         ELSE 0 END), 2) AS DownTime
-        FROM FATP_MACHINE_DATA f
-        WHERE START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+        FROM MACHINE_STATUS_HISTORY h
+        INNER JOIN FATP_MACHINE_INFO f
+          ON f.MACHINE_ID = h.MACHINE_ID
+        WHERE h.START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
           AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+          AND ( :factory IS NULL OR f.factory = :factory )
           AND ( :line IS NULL OR f.line = :line )
           AND NOT EXISTS (
                   SELECT 1
                   FROM   over_time_data m
                   WHERE  m.line = f.line
+                    AND  m.factory = f.factory
                     AND  m.type = 'Maintenance'
-                    AND  f.start_time < m.end_time
-                    AND  f.start_time  > m.start_time
+                    AND  h.start_time < m.end_time
+                    AND  h.start_time > m.start_time
                 )
       `;
       const resultOracle1 = await connection.execute(sql1, {
         dateFrom: date.dateFrom || timeR.dateFrom,
+        factory: date.factory || null,
         line: date.line?.[0]?.LINE || null,
         dateTo: date.dateTo || timeR.dateTo,
       });
       const sql2 = `
         SELECT
-          ERROR_TYPE,
-          ROUND(SUM( (NVL(END_TIME, SYSDATE) - START_TIME) * 24 ), 2) AS TOTAL_ERROR_HOURS
-        FROM FATP_MACHINE_DATA
-        WHERE STATUS = 'ERROR'
-          AND ( :line IS NULL OR line = :line )
-          AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+          e.ERROR_NAME AS ERROR_TYPE,
+          ROUND(SUM(
+            (CAST(NVL(h.END_TIME, CAST(SYSDATE AS TIMESTAMP)) AS DATE) - CAST(h.START_TIME AS DATE)) * 24
+          ), 2) AS TOTAL_ERROR_HOURS
+        FROM MACHINE_STATUS_HISTORY h
+        INNER JOIN FATP_MACHINE_INFO f
+          ON f.MACHINE_ID = h.MACHINE_ID
+        LEFT JOIN ERROR_CATALOG e
+          ON e.ERROR_ID = h.ERROR_ID
+        WHERE h.STATUS = 3
+          AND ( :factory IS NULL OR f.factory = :factory )
+          AND ( :line IS NULL OR f.line = :line )
+          AND h.START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
           AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
-        GROUP BY ERROR_TYPE
+        GROUP BY e.ERROR_NAME
         ORDER BY TOTAL_ERROR_HOURS DESC
         FETCH FIRST 5 ROWS ONLY
       `;
       console.log(date);
       const resultOracle2 = await connection.execute(sql2, {
         dateFrom: date.dateFrom || timeR.dateFrom,
+        factory: date.factory || null,
         line: date.line?.[0]?.LINE || null,
         dateTo: date.dateTo || timeR.dateTo,
       });
@@ -852,18 +882,32 @@ const MaintananceController = {
       connection = await req.app.locals.oraclePool.getConnection();
       const sql = `
       WITH filtered AS (
-        SELECT *
-        FROM fatp_machine_data f
-        WHERE status = 'ERROR'
-          AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
-                              AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
+        SELECT
+          f.line,
+          f.location,
+          f.machine_name,
+          e.error_name AS error_type,
+          h.start_time,
+          h.end_time,
+          (
+            CAST(NVL(h.end_time, CAST(SYSDATE AS TIMESTAMP)) AS DATE)
+            - CAST(h.start_time AS DATE)
+          ) * 24 * 60 * 60 AS time
+        FROM machine_status_history h
+        INNER JOIN fatp_machine_info f
+          ON f.machine_id = h.machine_id
+        LEFT JOIN error_catalog e
+          ON e.error_id = h.error_id
+        WHERE h.status = 3
+          AND h.start_time BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+                                AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
           AND NOT EXISTS (
                   SELECT 1
                   FROM   over_time_data m
                   WHERE  m.line = f.line
                     AND  m.type = 'Maintenance'
-                    AND  f.start_time < m.end_time
-                    AND  f.start_time  > m.start_time
+                    AND  h.start_time < m.end_time
+                    AND  h.start_time > m.start_time
                 )
       ),
       machine_agg AS (
@@ -938,22 +982,24 @@ const MaintananceController = {
       });
       const sql1 = `
         SELECT
-          ROUND(SUM(CASE WHEN STATUS = 'RUN'
-                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+          ROUND(SUM(CASE WHEN h.STATUS = 1
+                        THEN (CAST(NVL(h.END_TIME, CAST(SYSDATE AS TIMESTAMP)) AS DATE) - CAST(h.START_TIME AS DATE)) * 24
                         ELSE 0 END), 2) AS Availability,
-          ROUND(SUM(CASE WHEN STATUS = 'ERROR'
-                        THEN (NVL(END_TIME, SYSDATE) - START_TIME) * 24
+          ROUND(SUM(CASE WHEN h.STATUS = 3
+                        THEN (CAST(NVL(h.END_TIME, CAST(SYSDATE AS TIMESTAMP)) AS DATE) - CAST(h.START_TIME AS DATE)) * 24
                         ELSE 0 END), 2) AS DownTime
-        FROM FATP_MACHINE_DATA f
-        WHERE START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+        FROM MACHINE_STATUS_HISTORY h
+        INNER JOIN FATP_MACHINE_INFO f
+          ON f.MACHINE_ID = h.MACHINE_ID
+        WHERE h.START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
           AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
           AND NOT EXISTS (
                   SELECT 1
                   FROM   over_time_data m
                   WHERE  m.line = f.line
                     AND  m.type = 'Maintenance'
-                    AND  f.start_time < m.end_time
-                    AND  f.start_time  > m.start_time
+                    AND  h.start_time < m.end_time
+                    AND  h.start_time > m.start_time
                 )
       `;
       const resultOracle1 = await connection.execute(sql1, {
@@ -962,13 +1008,19 @@ const MaintananceController = {
       });
       const sql2 = `
         SELECT
-          ERROR_TYPE,
-          ROUND(SUM( (NVL(END_TIME, SYSDATE) - START_TIME) * 24 ), 2) AS TOTAL_ERROR_HOURS
-        FROM FATP_MACHINE_DATA
-        WHERE STATUS = 'ERROR'
-          AND START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
+          e.ERROR_NAME AS ERROR_TYPE,
+          ROUND(SUM(
+            (CAST(NVL(h.END_TIME, CAST(SYSDATE AS TIMESTAMP)) AS DATE) - CAST(h.START_TIME AS DATE)) * 24
+          ), 2) AS TOTAL_ERROR_HOURS
+        FROM MACHINE_STATUS_HISTORY h
+        INNER JOIN FATP_MACHINE_INFO f
+          ON f.MACHINE_ID = h.MACHINE_ID
+        LEFT JOIN ERROR_CATALOG e
+          ON e.ERROR_ID = h.ERROR_ID
+        WHERE h.STATUS = 3
+          AND h.START_TIME BETWEEN TO_DATE(:dateFrom, 'YYYY-MM-DD HH24:MI:SS')
           AND TO_DATE(:dateTo  , 'YYYY-MM-DD HH24:MI:SS')
-        GROUP BY ERROR_TYPE
+        GROUP BY e.ERROR_NAME
         ORDER BY TOTAL_ERROR_HOURS DESC
         FETCH FIRST 5 ROWS ONLY
       `;

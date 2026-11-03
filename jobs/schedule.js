@@ -14,12 +14,25 @@ cron.schedule(
           timeZone: "Asia/Ho_Chi_Minh",
         })}] ✅ Job chạy thành công!`
       );
-      const result = await MaintananceController.getMachineAnalysisDaily({
-        dateFrom: "",
-        dateTo: "",
-      });
-      const buffer = await MaintananceController.buildExcelBuffer2(result);
-      const filename = `ReportAnalysisMachine.xlsx`;
+      const factories = ["A02", "B01", "B06", "BN3"];
+      const attachments = [];
+
+      for (const factory of factories) {
+        const result = await MaintananceController.getMachineAnalysisDaily({
+          dateFrom: "",
+          dateTo: "",
+          factory,
+        });
+        const buffer = await MaintananceController.buildExcelBuffer2(result);
+
+        attachments.push({
+          filename: `ReportAnalysisMachine_${factory}.xlsx`,
+          content: buffer,
+          contentType:
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+      }
+
       await MaintananceController.sendEmailWithOptionalIcs({
         toList: [
           "cpe-vn-me-automation@mail.foxconn.com",
@@ -28,14 +41,7 @@ cron.schedule(
         subject: `[Report] Báo cáo tình trạng máy ${timeR.name}`,
         html: `<b>Mail tự động</b><br/>Báo cáo tình trạng máy ${timeR.name}.<br/>danh sách top 3 máy nhiều lỗi nhất mỗi line ${timeR.name}.`,
         icsContent: true,
-        attachments: [
-          {
-            filename,
-            content: buffer,
-            contentType:
-              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          },
-        ],
+        attachments,
       });
     } catch (err) {
       console.error("Error schedule: ", err);

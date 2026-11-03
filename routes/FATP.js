@@ -17,6 +17,6 @@ router.post("/editDataOverTimeFATP", FATPController.editDataOverTimeFATP);
 router.post("/deleteDataOverTimeFATP", FATPController.deleteDataOverTimeFATP);
 router.get("/getMachineError5Minutes", FATPController.getMachineError5Minutes);
 router.post("/getError7Day", FATPController.getError7Day);
-
+router.post("/updateFATPMachineStatus", FATPController.updateFATPMachineStatus);
 
 module.exports = router;
